@@ -1,0 +1,62 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+ENV/
+
+# PyInstaller
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Environments
+.env
+.env.*
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytest
+.pytest_cache/
+
+# Coverage reports
+htmlcov/
+coverage.xml
+*.cover
+*.py,cover
+.cache
+
+# IDEs
+.vscode/
+.idea/
+
+# SQLite and other local DBs
+*.sqlite3
+*.db
+
+# Logs
+*.log
+
+# MacOS
+.DS_Store
+
+# System
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints
+
+# VSCode local history
+.history/
+
+# FastAPI / Uvicorn reload artifacts
+__pydantic__/  # если используешь Pydantic V2
