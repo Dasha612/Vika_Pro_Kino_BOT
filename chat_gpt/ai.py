@@ -95,8 +95,8 @@ async def get_movie_recommendation_by_interaction(user_id: int, session: AsyncSe
         watched_movies = watched_movies[-5:]
         liked_movies = liked_movies[-5:]
         # Логирование для проверки
-        logger.info(f"Last 5 watched movies: {watched_movies}")
-        logger.info(f"Last 5 liked movies: {liked_movies}")
+        logger.info(f"Просмотренные фильмы: {watched_movies}")
+        logger.info(f"Понравившиеся фильмы: {liked_movies}")
 
         movies_1 = await find_by_imdb(watched_movies)  # Передаем список
         logger.info(movies_1)

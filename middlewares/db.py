@@ -1,10 +1,9 @@
 from aiogram import BaseMiddleware, Bot
-from aiogram.types import TelegramObject, Message, CallbackQuery
+from aiogram.types import TelegramObject, Message, CallbackQuery, Update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from typing import Any, Awaitable, Callable, Dict
 import os
-
-from kbds import get_callback_btns
+from kbds.inline import get_callback_btns
 
 
 
@@ -32,16 +31,19 @@ class CheckUserSubscription(BaseMiddleware):
     async def __call__(
             self, 
             handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]], 
-            event: Message | CallbackQuery, 
+            event: Update, 
             data: Dict[str, Any],
     ) -> Any:
-        # Получаем user_id в зависимости от типа события
-        if isinstance(event, Message):
-            user_id = event.from_user.id
-            reply_method = event.answer
-        else:  # CallbackQuery
-            user_id = event.from_user.id
+        # Определяем тип события и получаем user_id
+        if event.message:
+            user_id = event.message.from_user.id
             reply_method = event.message.answer
+        elif event.callback_query:
+            user_id = event.callback_query.from_user.id
+            reply_method = event.callback_query.message.answer
+        else:
+            # Если это другой тип события, пропускаем проверку
+            return await handler(event, data)
 
         try:
             chat_id = '-100' + os.getenv("TEST_CHAT_ID")
@@ -64,5 +66,4 @@ class CheckUserSubscription(BaseMiddleware):
             
         except Exception as e:
             print(f"Ошибка при проверке подписки: {e}")
-            # В случае ошибки пропускаем проверку
             return await handler(event, data)

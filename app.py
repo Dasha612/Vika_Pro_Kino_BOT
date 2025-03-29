@@ -8,6 +8,7 @@ load_dotenv(find_dotenv())
 
 from middlewares.db import DataBaseSesssion, CheckUserSubscription
 from handlers.anketa import anketa_router
+from handlers.recommendations import recommendations_router
 from database.engine import create_db, drop_db, session_maker
 
 
@@ -19,6 +20,7 @@ dp = Dispatcher()
 
 
 dp.include_router(anketa_router)
+dp.include_router(recommendations_router)
 
 async def on_startup(bot: Bot, dispatcher: Dispatcher):
     run_param = False
@@ -36,6 +38,7 @@ async def main():
     dp.shutdown.register(on_shutdown)
 
     dp.update.middleware(DataBaseSesssion(session_pool=session_maker))
+    dp.update.middleware(CheckUserSubscription(bot=bot))
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

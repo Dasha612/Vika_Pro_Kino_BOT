@@ -7,7 +7,7 @@ from aiogram.filters import StateFilter
 import asyncio  
 import os
 from aiogram.types import CallbackQuery
-from database.orm_query import orm_add_user_rec_set, add_interaction, add_user
+from database.orm_query import orm_add_user_rec_set, add_user
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -199,7 +199,7 @@ async def check_sub(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def my_profile(callback: CallbackQuery, bot: Bot, session: AsyncSession):
     await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
     user_id = callback.from_user.id
-    status = check_recommendations_status(user_id, session)
+    status = await check_recommendations_status(user_id, session)
     status = 'настроены' if status else 'не настроены'
     await callback.message.answer(
         (
