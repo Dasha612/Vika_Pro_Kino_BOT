@@ -10,6 +10,7 @@ from middlewares.db import DataBaseSesssion, CheckUserSubscription
 from handlers.anketa import anketa_router
 from handlers.recommendations import recommendations_router
 from database.engine import create_db, drop_db, session_maker
+from utils.logger import setup_logger
 
 
 
@@ -18,6 +19,7 @@ ALLOWED_UPDATES = ['message', 'edited_message', 'callback_query']
 bot  = Bot(token=os.getenv('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+logger = setup_logger(__name__)
 
 dp.include_router(anketa_router)
 dp.include_router(recommendations_router)
@@ -26,8 +28,7 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher):
     run_param = False
     if run_param:
         await drop_db()
-    else:
-        await create_db()
+    await create_db()
 
 async def on_shutdown(bot: Bot, dispatcher: Dispatcher):
     print('Бот лег...')

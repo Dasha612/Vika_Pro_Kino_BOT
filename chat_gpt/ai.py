@@ -80,6 +80,7 @@ async def get_movie_recommendation_by_preferences(user_id: int, session=AsyncSes
 
     logger.info(f"Extracted CHAT GPT data: {movie_list_str}")
     logger.info(f"movie_list: {movie_list}, {type(movie_list)}")
+
     return movie_list
 
 

@@ -29,7 +29,10 @@ class Movies(Base):
     movie_year: Mapped[int] = mapped_column(Integer, nullable=False)
     movie_genre: Mapped[str] = mapped_column(String, nullable=False)
     movie_duration: Mapped[int] = mapped_column(Integer, nullable=False)
-    movie_country: Mapped[str] = mapped_column(String, nullable=False)
+
+
+
+
 
 # ─────────────────────────────────────
 
@@ -53,7 +56,7 @@ class Users_anketa(Base):
 class Users_interaction(Base):
     __tablename__ = "users_interaction"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id"), index=True)
     movie_id: Mapped[str] = mapped_column(String, ForeignKey("movies.imdb"), index=True)
     interaction_type: Mapped[str] = mapped_column(String, nullable=False, index=True)  # "like", "dislike", etc.
