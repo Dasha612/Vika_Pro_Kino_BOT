@@ -1,7 +1,7 @@
 from database.models import Users_anketa, Users, Movies, Users_interaction
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import select, delete
 import logging
 
 logger = logging.getLogger(__name__)
@@ -86,15 +86,18 @@ async def add_movies_by_interaction(user_id: int, movie_id: str, interaction_typ
         raise
 
 #функция для получения фильмов по взаимодействию
-async def get_movies_by_interaction(user_id: int, session: AsyncSession, interaction_type: str = None):
-    logger.debug(f"Получение фильмов для пользователя {user_id}, тип взаимодействия: {interaction_type}")
+async def get_movies_by_interaction(user_id: int, session: AsyncSession, interaction_types: list = None):
+    logger.debug(f"Получение фильмов для пользователя {user_id}, типы взаимодействия: {interaction_types}")
     
+    # Начальный запрос
     query = select(Movies).join(Users_interaction).where(Users_interaction.user_id == user_id)
     
-    if interaction_type:
-        query = query.where(Users_interaction.interaction_type == interaction_type)
+    # Если переданы типы взаимодействия, фильтруем по ним
+    if interaction_types:
+        query = query.where(Users_interaction.interaction_type.in_(interaction_types))
     
     try:
+        # Выполняем запрос
         result = await session.scalars(query)
         movies = result.all()
         logger.debug(f"Найдено {len(movies)} фильмов")
@@ -102,6 +105,44 @@ async def get_movies_by_interaction(user_id: int, session: AsyncSession, interac
     except Exception as e:
         logger.error(f"Ошибка при получении фильмов: {e}", exc_info=True)
         return []
+    
+async def delete_movies_by_interaction(user_id: int, session: AsyncSession, interaction_types: list = None):
+    """Удаляет фильмы из базы данных по типу взаимодействия пользователя (like, dislike, unwatched)"""
+    
+    try:
+        # Начальный запрос на выборку фильмов для пользователя
+        query = select(Users_interaction).where(Users_interaction.user_id == user_id)
+        
+        # Если переданы типы взаимодействия, фильтруем по ним
+        if interaction_types:
+            query = query.where(Users_interaction.interaction_type.in_(interaction_types))
+
+        # Выполняем запрос для получения всех записей
+        result = await session.execute(query)
+        interactions = result.scalars().all()
+
+        # Если записей нет
+        if not interactions:
+            logger.info(f"Для пользователя {user_id} не найдено фильмов с указанными типами взаимодействия.")
+            return
+
+        # Логируем количество найденных записей
+        logger.info(f"Найдено {len(interactions)} записей для пользователя {user_id} с типами взаимодействия: {interaction_types}")
+
+        # Для каждого взаимодействия удаляем запись
+        for interaction in interactions:
+            # Удаляем запись из таблицы взаимодействий
+            await session.execute(delete(Users_interaction).where(Users_interaction.id == interaction.id))
+
+        # Подтверждаем изменения
+        await session.commit()
+
+        logger.info(f"Удалены {len(interactions)} фильмов для пользователя {user_id} по типам взаимодействия: {interaction_types}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при удалении фильмов для пользователя {user_id}: {e}", exc_info=True)
+        await session.rollback()
+        raise
 
 
 #функция для получения предпочтений пользователя
@@ -135,3 +176,35 @@ async def get_movie_from_db(imdb: str, session: AsyncSession):
     query = select(Movies).where(Movies.imdb == imdb)
     movie = await session.scalar(query)
     return movie
+
+
+async def reset_anketa(user_id: int, session: AsyncSession):
+    try:
+        # Ищем анкету пользователя в базе
+        query = select(Users_anketa).where(Users_anketa.user_id == user_id)
+        anketa = await session.scalar(query)
+        
+        if not anketa:
+            raise ValueError(f"Анкета для пользователя {user_id} не найдена.")
+        
+        # Сбрасываем все поля анкеты на начальные значения
+        anketa.user_rec_status = False  # Статус рекомендаций
+        anketa.ans1 = ""
+        anketa.ans2 = ""
+        anketa.ans3 = ""
+        anketa.ans4 = ""
+        anketa.ans5 = ""
+        anketa.ans6 = ""
+        anketa.ans7 = ""
+        
+        # Сохраняем изменения в базе данных
+        await session.commit()
+        return "Анкета успешно сброшена"
+    
+    except Exception as e:
+        logger.error(f"Ошибка при сбросе анкеты для пользователя {user_id}: {e}")
+        await session.rollback()
+        return f"Ошибка при сбросе анкеты: {e}"
+
+
+                                

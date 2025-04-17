@@ -31,3 +31,5 @@ def create_movie_carousel_keyboard(index: int = 0) -> InlineKeyboardMarkup:
     )
     
     return builder.as_markup()
+
+

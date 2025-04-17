@@ -1,6 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-
+import os
 
 def get_callback_btns(
         *,
@@ -40,3 +40,21 @@ def get_inlineMix_btns(
             keyboard.add(InlineKeyboardButton(text=text, callback_data=value))
     
     return keyboard.adjust(*sizes).as_markup()
+
+
+subscribe_button  = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text='Подписаться на канал', url=f"https://t.me/{os.getenv('TEST_CHANNEL_ID')}")],
+    [InlineKeyboardButton(text='Проверить подписку', callback_data='check_subscription')]
+])
+
+rate_buttons = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text='1', callback_data='1'),
+            InlineKeyboardButton(text='2', callback_data='2'),
+            InlineKeyboardButton(text='3', callback_data='3'),
+            InlineKeyboardButton(text='4', callback_data='4'),
+            InlineKeyboardButton(text='5', callback_data='5')
+        ]
+    ]
+)

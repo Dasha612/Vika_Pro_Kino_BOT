@@ -9,11 +9,17 @@ import os
 from aiogram.types import CallbackQuery
 from database.orm_query import orm_add_user_rec_set, add_user
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 
-
-from kbds.inline import get_callback_btns
+from kbds.inline import get_callback_btns, subscribe_button
 from database.orm_query import check_recommendations_status
 from chat_gpt.questions import questions
+
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 
 anketa_router = Router()
 
@@ -29,6 +35,7 @@ class Anketa(StatesGroup):
 
 
 
+
 @anketa_router.callback_query(StateFilter(None), F.data == "set_profile")
 async def registration_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(questions[0])
@@ -38,7 +45,7 @@ async def registration_start(callback: CallbackQuery, state: FSMContext):
 @anketa_router.message(Anketa.question_1, F.text)
 async def set_q1(message: types.Message, state: FSMContext):
     await state.update_data(q1=message.text)
-    await message.answer(questions[1])
+    await message.answer(questions[1], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
     await state.set_state(Anketa.question_2)
 
 @anketa_router.message(Anketa.question_1)
@@ -48,7 +55,7 @@ async def set_q1(message: types.Message, state: FSMContext):
 @anketa_router.message(Anketa.question_2, F.text)
 async def set_q2(message: types.Message, state: FSMContext):
     await state.update_data(q2=message.text)
-    await message.answer(questions[2])
+    await message.answer(questions[2], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
     await state.set_state(Anketa.question_3)
 
 @anketa_router.message(Anketa.question_2)
@@ -58,7 +65,7 @@ async def set_q2(message: types.Message, state: FSMContext):
 @anketa_router.message(Anketa.question_3, F.text)
 async def set_q3(message: types.Message, state: FSMContext):
     await state.update_data(q3=message.text)
-    await message.answer(questions[3])
+    await message.answer(questions[3], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
     await state.set_state(Anketa.question_4)
 
 @anketa_router.message(Anketa.question_3)
@@ -68,7 +75,7 @@ async def set_q3(message: types.Message, state: FSMContext):
 @anketa_router.message(Anketa.question_4, F.text)
 async def set_q4(message: types.Message, state: FSMContext):
     await state.update_data(q4=message.text)
-    await message.answer(questions[4])
+    await message.answer(questions[4], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
     await state.set_state(Anketa.question_5)
 
 @anketa_router.message(Anketa.question_4)
@@ -78,7 +85,7 @@ async def set_q4(message: types.Message, state: FSMContext):
 @anketa_router.message(Anketa.question_5, F.text)
 async def set_q5(message: types.Message, state: FSMContext):
     await state.update_data(q5=message.text)
-    await message.answer(questions[5])
+    await message.answer(questions[5], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
     await state.set_state(Anketa.question_6)
 
 @anketa_router.message(Anketa.question_5)
@@ -88,7 +95,7 @@ async def set_q5(message: types.Message, state: FSMContext):
 @anketa_router.message(Anketa.question_6, F.text)
 async def set_q6(message: types.Message, state: FSMContext):
     await state.update_data(q6=message.text)
-    await message.answer(questions[6])
+    await message.answer(questions[6], reply_markup=get_callback_btns(btns={"Назад": "Назад"}) )
     await state.set_state(Anketa.question_7)
 
 @anketa_router.message(Anketa.question_6)
@@ -106,28 +113,19 @@ async def set_q7(message: types.Message, state: FSMContext, bot: Bot, session: A
         await message.answer(f"Ошибка при добавлении данных в базу: {e}")
 
 
-    member = await bot.get_chat_member(chat_id='-100' + os.getenv("TEST_CHAT_ID"), user_id=message.from_user.id)
+    
 
 
     await message.answer('Уфф...Все ответы записал.')
     await asyncio.sleep(5)
     await message.answer('Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить.', reply_markup=types.ReplyKeyboardRemove())
     await asyncio.sleep(5)
+    current_state = await state.get_state()
 
-    if member.status == 'left':
-        await message.answer(
-            'Начинаю поиск фильмов. Пока что ты можешь подписаться на телеграм канал Вика про кино',
-            reply_markup=get_callback_btns(btns={
-                'Подписаться на канал': os.getenv("TEST_CHANNEL_ID"),
-                'Проверить подписку': 'check'
-            })
-        )
-    else:
-        await message.answer('Начинаю рекомендовать фильмы!')
+    logger.info(f"STATE: {current_state}\n")
+    await message.answer('Начать рекомендации?', reply_markup=get_callback_btns(btns={"Давай": "recommendations", 'Нет, я хочу вернуться в меню': 'my_profile'}))
+
         
-        # Отображаем первый фильм
-        #await send_movie_or_edit(message, movies[0], state, 0, message.from_user.id)
-
 
 @anketa_router.message(StateFilter('*'), F.text == "Отмена")
 async def cancel_cmd(message: types.Message, state: FSMContext):
@@ -156,8 +154,9 @@ async def back_cmd(message: types.Message, state: FSMContext):
 
 
 @anketa_router.message(CommandStart())
-async def start_cmd(message: types.Message, session: AsyncSession):
+async def start_cmd(message: types.Message, session: AsyncSession, state: FSMContext):
     await add_user(message.from_user.id, session)
+
     await message.answer(
         "Привет!\n"
         "Я — твой личный <b>КиноБот</b> 🎥\n"
@@ -165,7 +164,7 @@ async def start_cmd(message: types.Message, session: AsyncSession):
         "Готов? Тогда начнём! 🍿", reply_markup=get_callback_btns(
             btns={
                 "Мой профиль": "my_profile",
-                "Избранное": "favorites",
+                "Избранное": "favourites",
                 "Рекомендации": "recommendations"
             }
         ))
@@ -177,31 +176,30 @@ async def start_cmd(message: types.Message, session: AsyncSession):
 async def check_sub(callback: CallbackQuery, bot: Bot, state: FSMContext):
     is_subscribed = await bot.get_chat_member(chat_id='-100' + os.getenv("TEST_CHAT_ID"), user_id=callback.from_user.id)
     if is_subscribed.status not in ['left', 'kicked', 'banned']:
-        await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
-        await callback.message.answer(
-            "Спасибо за подписку!\nНачинаю рекомендовать фильмы!"
+        #await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
+        await callback.message.edit_text(
+            text="Спасибо за подписку!"
         )
+        await asyncio.sleep(2)
+        #await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
         #начинаем реккомендации
         
     else:
-        await callback.message.answer(
-            "Для начала подпишитесь на наш канал, чтобы продолжить.",
-            reply_markup=get_callback_btns(
-                        btns={
-                            "Подписаться": "subscribe",
-                            "Проверить подписку": "check_subscription"
-                        }
-                    ))
+        await callback.message.edit_text(
+            text="Для начала подпишитесь на наш канал, чтобы продолжить.",
+            reply_markup=subscribe_button
+        )
     await callback.answer()
 
 
 @anketa_router.callback_query(F.data == 'my_profile')
-async def my_profile(callback: CallbackQuery, bot: Bot, session: AsyncSession):
-    await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
+async def my_profile(callback: CallbackQuery, bot: Bot, session: AsyncSession, state: FSMContext):
+    
+    #await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
     user_id = callback.from_user.id
     status = await check_recommendations_status(user_id, session)
     status = 'настроены' if status else 'не настроены'
-    await callback.message.answer(
+    await callback.message.edit_text(
         (
             f"<b>👤 Ваш профиль:</b>\n"
             f"<b>ID:</b> <code>{user_id}</code>\n"
@@ -211,11 +209,29 @@ async def my_profile(callback: CallbackQuery, bot: Bot, session: AsyncSession):
         parse_mode="HTML",
         reply_markup=get_callback_btns(
             btns={
-                "Мой профиль": "my_profile",
-                "Избранное": "favorites",
-                "Рекомендации": "recommendations"
+                "Сбросить рекоммендации": "reset_anketa",
+                "В главное меню": "to_the_main_page"
             }
         )
     )
 
 
+@anketa_router.callback_query(F.data == 'to_the_main_page')
+async def main_page(callback: CallbackQuery):
+    await callback.message.edit_text(text='Выберите пункт из меню', reply_markup=get_callback_btns(
+            btns={
+                "Мой профиль": "my_profile",
+                "Избранное": "favourites",
+                "Рекомендации": "recommendations"
+            }
+        ))
+
+
+@anketa_router.callback_query(F.data == 'reset_anketa')
+async def main_page(callback: CallbackQuery):
+    await callback.message.edit_text(text='Анкета сброшена', reply_markup=get_callback_btns(
+            btns={
+                "Заполнить анкету заново": "set_profile",
+                "В главное меню": "to_the_main_page"
+            }
+        ))

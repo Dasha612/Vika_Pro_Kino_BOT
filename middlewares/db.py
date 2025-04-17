@@ -3,8 +3,11 @@ from aiogram.types import TelegramObject, Message, CallbackQuery, Update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from typing import Any, Awaitable, Callable, Dict
 import os
-from kbds.inline import get_callback_btns
+from kbds.inline import get_callback_btns, subscribe_button
+import logging
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)    
 
 
 
@@ -48,19 +51,15 @@ class CheckUserSubscription(BaseMiddleware):
         try:
             chat_id = '-100' + os.getenv("TEST_CHAT_ID")
             member = await self.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-            
+            logger.info(f"Проверка подписки для пользователя {user_id}: {member.status}")
             if member.status in ['left', 'kicked', 'banned']:
                 await reply_method(
                     'Для использования бота необходимо подписаться на канал Вика про кино',
-                    reply_markup=get_callback_btns(
-                        btns={
-                            "Подписаться": "subscribe",
-                            "Проверить подписку": "check_subscription"
-                        }
-                    )
+                    reply_markup=subscribe_button
                 )
                 return  # Прерываем выполнение хэндлера
             
+
             # Если пользователь подписан, продолжаем выполнение
             return await handler(event, data)
             
