@@ -14,15 +14,10 @@ from handlers.favourites import favourites_router
 
 
 
-
 ALLOWED_UPDATES = ['message', 'edited_message', 'callback_query']
 
 bot  = Bot(token=os.getenv('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-
-
-
-
 
 
 dp.include_router(anketa_router)

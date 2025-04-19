@@ -106,7 +106,7 @@ async def get_movies_by_interaction(user_id: int, session: AsyncSession, interac
         logger.error(f"Ошибка при получении фильмов: {e}", exc_info=True)
         return []
     
-async def delete_movies_by_interaction(user_id: int, session: AsyncSession, interaction_types: list = None):
+async def delete_movies_by_interaction(user_id: int, session: AsyncSession, interaction_types: list = None, movie_id: str = None):
     """Удаляет фильмы из базы данных по типу взаимодействия пользователя (like, dislike, unwatched)"""
     
     try:
@@ -116,6 +116,10 @@ async def delete_movies_by_interaction(user_id: int, session: AsyncSession, inte
         # Если переданы типы взаимодействия, фильтруем по ним
         if interaction_types:
             query = query.where(Users_interaction.interaction_type.in_(interaction_types))
+            
+        # Если передан ID фильма, фильтруем по нему
+        if movie_id:
+            query = query.where(Users_interaction.movie_id == movie_id)
 
         # Выполняем запрос для получения всех записей
         result = await session.execute(query)
@@ -123,11 +127,15 @@ async def delete_movies_by_interaction(user_id: int, session: AsyncSession, inte
 
         # Если записей нет
         if not interactions:
-            logger.info(f"Для пользователя {user_id} не найдено фильмов с указанными типами взаимодействия.")
+            logger.info(f"Для пользователя {user_id} не найдено фильмов с указанными параметрами.")
             return
 
         # Логируем количество найденных записей
-        logger.info(f"Найдено {len(interactions)} записей для пользователя {user_id} с типами взаимодействия: {interaction_types}")
+        logger.info(f"Найдено {len(interactions)} записей для пользователя {user_id}")
+        if interaction_types:
+            logger.info(f"Типы взаимодействия: {interaction_types}")
+        if movie_id:
+            logger.info(f"ID фильма: {movie_id}")
 
         # Для каждого взаимодействия удаляем запись
         for interaction in interactions:
@@ -137,7 +145,7 @@ async def delete_movies_by_interaction(user_id: int, session: AsyncSession, inte
         # Подтверждаем изменения
         await session.commit()
 
-        logger.info(f"Удалены {len(interactions)} фильмов для пользователя {user_id} по типам взаимодействия: {interaction_types}")
+        logger.info(f"Удалены {len(interactions)} фильмов для пользователя {user_id}")
 
     except Exception as e:
         logger.error(f"Ошибка при удалении фильмов для пользователя {user_id}: {e}", exc_info=True)
@@ -177,8 +185,17 @@ async def get_movie_from_db(imdb: str, session: AsyncSession):
     movie = await session.scalar(query)
     return movie
 
+async def get_movies_from_db_by_imdb_list(imdb_ids: list[str], session: AsyncSession) -> dict:
+    """Получает фильмы из базы данных по списку IMDb ID и возвращает словарь {imdb: movie}"""
+    if not imdb_ids:
+        return {}
 
-async def reset_anketa(user_id: int, session: AsyncSession):
+    stmt = select(Movies).where(Movies.imdb.in_(imdb_ids))
+    result = await session.scalars(stmt)
+    return {movie.imdb: movie for movie in result}
+
+
+async def reset_anketa_in_db(user_id: int, session: AsyncSession):
     try:
         # Ищем анкету пользователя в базе
         query = select(Users_anketa).where(Users_anketa.user_id == user_id)

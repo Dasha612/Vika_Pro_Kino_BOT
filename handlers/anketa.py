@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
 from kbds.inline import get_callback_btns, subscribe_button
-from database.orm_query import check_recommendations_status
+from database.orm_query import check_recommendations_status, reset_anketa_in_db
 from chat_gpt.questions import questions
 
 
@@ -135,21 +135,30 @@ async def cancel_cmd(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Действие отменено", reply_markup=types.ReplyKeyboardRemove())
 
-@anketa_router.message(StateFilter('*'), F.text == "Назад")
-async def back_cmd(message: types.Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state == Anketa.question_1:
-        await message.answer("Предыдущего шага нет")
-        return
-    
-    previous_state = None
 
+@anketa_router.callback_query(StateFilter('*'), F.data == "Назад")
+async def handle_back(callback: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+
+    if current_state == Anketa.question_1.state:
+        await callback.message.answer("Ты на первом вопросе. Назад нельзя 🧱")
+        await callback.answer()
+        return
+
+    previous_state = None
     for step in Anketa.__all_states__:
         if step.state == current_state:
-            await state.set_state(previous_state)
-            await message.answer(questions[previous_state.index])
-            return
+            if previous_state:
+                await state.set_state(previous_state)
+                await callback.message.edit_text(
+                    questions[previous_state.index],
+                    reply_markup=get_callback_btns(btns={"Назад": "Назад"})
+                )
+            break
         previous_state = step
+
+    await callback.answer()
+
 
 
 
@@ -157,7 +166,7 @@ async def back_cmd(message: types.Message, state: FSMContext):
 async def start_cmd(message: types.Message, session: AsyncSession, state: FSMContext):
     await add_user(message.from_user.id, session)
 
-    await message.answer(
+    start_message=await message.answer(
         "Привет!\n"
         "Я — твой личный <b>КиноБот</b> 🎥\n"
         "Помогу выбрать фильм по настроению, жанру или даже если «просто что-нибудь посмотреть».\n"
@@ -168,7 +177,8 @@ async def start_cmd(message: types.Message, session: AsyncSession, state: FSMCon
                 "Рекомендации": "recommendations"
             }
         ))
-    await asyncio.sleep(2)
+    await state.update_data(start_message_id=start_message.message_id)
+    
 
 
 
@@ -228,10 +238,14 @@ async def main_page(callback: CallbackQuery):
 
 
 @anketa_router.callback_query(F.data == 'reset_anketa')
-async def main_page(callback: CallbackQuery):
+async def reset_anketa_handler(callback: CallbackQuery, session: AsyncSession):
+    user_id = callback.from_user.id
+    result = await reset_anketa_in_db(user_id, session)
+
     await callback.message.edit_text(text='Анкета сброшена', reply_markup=get_callback_btns(
-            btns={
-                "Заполнить анкету заново": "set_profile",
-                "В главное меню": "to_the_main_page"
-            }
-        ))
+        btns={
+            "Заполнить анкету заново": "set_profile",
+            "В главное меню": "to_the_main_page"
+        }
+    )) 
+    await callback.answer()

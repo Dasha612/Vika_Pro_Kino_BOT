@@ -7,10 +7,11 @@ from aiogram.fsm.state import State, StatesGroup
 import logging
 from handlers.callback_data import Menu_Callback
 import os
+import asyncio
 
 from database.orm_query import add_movies_by_interaction, get_movies_by_interaction, check_recommendations_status, delete_movies_by_interaction
 from kbds.inline import get_callback_btns, subscribe_button, rate_buttons
-from chat_gpt.ai import get_movie_recommendation_by_preferences
+from chat_gpt.ai import get_movie_recommendation_by_interaction
 from kinopoisk_imdb.search import get_movies, extract_movie_data
 from kbds.pagination import create_movie_carousel_keyboard
 from handlers.movie_utils import send_movie_card
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 class Recomendations(StatesGroup):
     waiting_for_action = State()  # Состояние, когда пользователь выбирает действие
     processing = State()          # Состояние, когда выполняется какое-либо действие
+    waiting_for_rating = State()  # Новое состояние для ожидания оценки
 
 
 
@@ -30,6 +32,11 @@ class Recomendations(StatesGroup):
 
 @recommendations_router.callback_query(F.data == 'recommendations')
 async def send_recommendations(callback: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext):
+    #await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
+
+    await bot.send_chat_action(callback.message.chat.id, action="typing")
+    await asyncio.sleep(1) 
+
     current_state = await state.get_state()
     logger.info(f"STATE: {current_state}\n")
 
@@ -55,8 +62,8 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
         
         # Отправляем первый непросмотренный фильм
         message = await send_movie_card(callback.message, unwatched_movies[0], 0, custom_keyboard=create_movie_carousel_keyboard)
-        
-        # Сохраняем список фильмов, текущий индекс и ID сообщения в состояние
+            
+            # Сохраняем список фильмов, текущий индекс и ID сообщения в состояние
         await state.set_state(Recomendations.waiting_for_action)
         await state.update_data(
             movies=unwatched_movies, 
@@ -64,7 +71,9 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
             message_id=message.message_id,
             chat_id=message.chat.id
         )
-        await delete_movies_by_interaction(user_id, session, ['unwatched'])
+        await delete_movies_by_interaction(user_id, session, ['unwatched'], unwatched_movies[0].imdb)
+        await callback.answer()
+            
 
     else:
     # Получаем список фильмов
@@ -73,7 +82,7 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
         movies = []
 
         while not movies and retries < max_retries:
-            chat_gpt_response = await get_movie_recommendation_by_preferences(user_id, session)
+            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session)
             movies_data = await get_movies(chat_gpt_response, user_id, session)
             movies = await extract_movie_data(movies_data)
 
@@ -82,7 +91,10 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
             logger.info("_" * 100)
 
             retries += 1
-        if retries >= max_retries: callback.message.answer('Кажется, произошла ошибка или прогер хочет денег :(\nПопробуйте нажать кнопку "Стоп" и возобновить рекомендации или обратитесь в поддержку - @Ddasmii')
+        if retries >= max_retries: 
+            await callback.message.answer('Кажется, произошла ошибка или прогер хочет денег :(\nПопробуйте нажать кнопку "Стоп" и возобновить рекомендации или обратитесь в поддержку - @Ddasmii')
+            await callback.answer()
+            return
 
 
         # Отправляем первый фильм
@@ -96,13 +108,17 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
             message_id=message.message_id,
             chat_id=message.chat.id
         )
+        await callback.answer()
 
     
-    await callback.answer()
+    
 
 
 @recommendations_router.callback_query(Menu_Callback.filter())
 async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callback, state: FSMContext, session: AsyncSession, bot: Bot):
+    data = await state.get_data()
+    movies = data.get("movies", [])
+    current_index = data.get("current_index", 0)
     action = callback_data.menu_name
     user_id = callback.from_user.id
     current_state = await state.get_state()
@@ -112,9 +128,6 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
         return
     
     await state.set_state(Recomendations.processing.state)
-    data = await state.get_data()
-    movies = data.get("movies", [])
-    current_index = data.get("current_index", 0)
     
     if current_index >= len(movies) or current_index < 0:
         await callback.message.answer("Возникла ошибка с выбором фильма. Попробуйте снова.")
@@ -141,19 +154,42 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
     if action == "stop_recommendations":
         remaining_movies = movies[current_index:]
         for movie in remaining_movies:
-            await add_movies_by_interaction(user_id, movie['movie_id'], 'unwatched', session)
+            movie_id = movie.imdb if hasattr(movie, 'imdb') else movie.get('movie_id')
+            await add_movies_by_interaction(user_id, movie_id, 'unwatched', session)
+
         await state.clear()  # Очищаем состояние, если остановили рекомендации
         await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
-        await callback.message.answer(
-            "Рекомендации остановлены. Возвращайтесь, когда захотите!",
-            reply_markup=get_callback_btns(btns={
-                "Мой профиль": "my_profile",
-                "Избранное": "favorites",
-                "Рекомендации": "recommendations"
-            })
-        )
+
+        start_message_id = data.get("start_message_id")
+
+        if start_message_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=callback.message.chat.id,
+                    message_id=start_message_id,
+                    text="Рекомендации остановлены. Возвращайтесь, когда захотите!",
+                    reply_markup=get_callback_btns(btns={
+                        "Мой профиль": "my_profile",
+                        "Избранное": "favorites",
+                        "Рекомендации": "recommendations"
+                    })
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отредактировать стартовое сообщение: {e}")
+                # optionally: отправить новое сообщение, если нужно
+                await bot.send_message(
+                    chat_id=callback.message.chat.id,
+                    text="Рекомендации остановлены. Возвращайтесь, когда захотите!",
+                    reply_markup=get_callback_btns(btns={
+                        "Мой профиль": "my_profile",
+                        "Избранное": "favorites",
+                        "Рекомендации": "recommendations"
+                    })
+                )
+
         await callback.answer()
         return
+
     
     
     elif action in ["like", "next"]:
@@ -163,7 +199,8 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
         }.get(action)
 
         # Сохраняем действия пользователя
-        await add_movies_by_interaction(user_id, movie['movie_id'], interaction_type, session)
+        movie_id = movie.imdb if hasattr(movie, 'imdb') else movie.get('movie_id')
+        await add_movies_by_interaction(user_id, movie_id, interaction_type, session)
 
     if action == "watched":
         await state.set_state(Recomendations.waiting_for_action.state)
@@ -173,103 +210,100 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
         return
     
     current_index += 1
-    retries = 0
-
-    while current_index >= len(movies) and retries < 3:
-        await callback.answer("Подождите немного, подгружаем новые рекомендации...")
-        chat_gpt_response = await get_movie_recommendation_by_preferences(user_id, session)
-        movies_data = await get_movies(chat_gpt_response, user_id, session)
-        movies = await extract_movie_data(movies_data)
-
-        logger.info("_" * 100)
-        logger.info(f"Отправка фильмов пользователю из функции extract_movie_data: {movies}")
-        logger.info("_" * 100)
-        if movies:
-
-            message = await send_movie_card(callback.message, movies[0], 0, custom_keyboard=create_movie_carousel_keyboard)
-
-            await state.set_state(Recomendations.waiting_for_action)
-            await state.update_data(
-                movies=movies,
-                current_index=0,
-                message_id=message.message_id,
-                chat_id=message.chat.id
-            )
-        else: retries += 1
-        
-
     await state.update_data(current_index=current_index)
+
     if current_index < len(movies):
         await send_movie_card(callback.message, movies[current_index], current_index, edit=True, custom_keyboard=create_movie_carousel_keyboard)
-    await state.set_state(Recomendations.waiting_for_action)
-    await callback.answer()
+        await state.set_state(Recomendations.waiting_for_action)
+        await callback.answer()
 
-
-    
-
-
-    
-
-
-@recommendations_router.callback_query(lambda c: c.data in ['1', '2', '3', '4', '5'])
-async def handle_rating(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession,  bot: Bot):
-    user_rating = int(callback.data)  # callback.data содержит оценку (1-5)
-    data = await state.get_data()
-    current_index = data.get("current_index", 0)
-    movies = data.get("movies", [])
-    movie = movies[current_index]
-
-    logger.info("_" * 100)
-    logger.info(f"MOVIE: {movie}")
-    logger.info("_" * 100)
-
-
-    user_id = callback.from_user.id
-
-    if user_rating >= 4:
-        await add_movies_by_interaction(user_id, movie['movie_id'], 'watched', session)
-
-    else: await add_movies_by_interaction(user_id, movie['movie_id'], 'disliked', session)
-    
-    await state.update_data(last_action="")
-    if current_index + 1 < len(movies):
-        next_index = current_index + 1
-        await state.update_data(current_index=next_index)
-
-        try:
-            await send_movie_card(callback.message, movies[next_index], next_index, edit=True, custom_keyboard=create_movie_carousel_keyboard)
-        except Exception as e:
-            logger.error(f"Ошибка при отправке следующего фильма: {e}")
     else:
+        await callback.answer("Подождите немного, подгружаем новые рекомендации...")
 
-
-        logger.info("Фильмы закончились, запрашиваем новые рекомендации.")
-        retries = 0
-        while retries < 3:
-            await callback.answer("Подождите немного, подгружаем новые рекомендации...")
-            chat_gpt_response = await get_movie_recommendation_by_preferences(user_id, session)
+        while True:
+            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session)
             movies_data = await get_movies(chat_gpt_response, user_id, session)
-            movies = await extract_movie_data(movies_data)
+            new_movies = await extract_movie_data(movies_data)
 
             logger.info("_" * 100)
-            logger.info(f"Отправка фильмов пользователю из функции extract_movie_data: {movies}")
+            logger.info(f"Отправка фильмов пользователю из функции extract_movie_data: {new_movies}")
             logger.info("_" * 100)
-            if movies:
-
-                message = await send_movie_card(callback.message, movies[0], 0, custom_keyboard=create_movie_carousel_keyboard)
+            
+            if new_movies:
+                message = await send_movie_card(callback.message, new_movies[0], 0, edit=True, custom_keyboard=create_movie_carousel_keyboard)
 
                 await state.set_state(Recomendations.waiting_for_action)
                 await state.update_data(
-                    movies=movies,
+                    movies=new_movies,
                     current_index=0,
                     message_id=message.message_id,
                     chat_id=message.chat.id
                 )
-            else: retries += 1
-        
-        
+                await callback.answer()
+                return
+            
+            await callback.answer("Не удалось получить рекомендации. Пробуем ещё раз...")
+            await callback.answer()
+
+
+
+@recommendations_router.callback_query(lambda c: c.data in ['1', '2', '3', '4', '5'])
+async def handle_rating(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession,  bot: Bot):
+    user_rating = int(callback.data)  
+    data = await state.get_data()
+    current_index = data.get("current_index", 0)
+    movies = data.get("movies", [])
+    movie = movies[current_index]
+    user_id = callback.from_user.id
+
+    logger.info("_" * 100)
+    logger.info(f"Пользователь оценил фильм: {movie} на {user_rating}")
+    logger.info("_" * 100)
+    movie_id = movie.imdb if hasattr(movie, 'imdb') else movie.get('movie_id')
+
+    if user_rating >= 4:
+        await add_movies_by_interaction(user_id, movie_id, 'watched', session)
+
+    else: await add_movies_by_interaction(user_id, movie_id, 'disliked', session)
     
-    await callback.answer()
+    await state.update_data(last_action="")
+    current_index += 1
+    await state.update_data(current_index=current_index)
+
+    if current_index < len(movies):
+        await send_movie_card(callback.message, movies[current_index], current_index, edit=True, custom_keyboard=create_movie_carousel_keyboard)
+        await state.set_state(Recomendations.waiting_for_action)
+        await callback.answer()
+
+    else:
+        await callback.answer("Подождите немного, подгружаем новые рекомендации...")
+
+        while True:
+            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session)
+            movies_data = await get_movies(chat_gpt_response, user_id, session)
+            new_movies = await extract_movie_data(movies_data)
+
+            logger.info("_" * 100)
+            logger.info(f"Отправка фильмов пользователю из функции extract_movie_data: {new_movies}")
+            logger.info("_" * 100)
+            
+            if new_movies:
+                message = await send_movie_card(callback.message, new_movies[0], 0, edit=True, custom_keyboard=create_movie_carousel_keyboard)
+
+                await state.set_state(Recomendations.waiting_for_action)
+                await state.update_data(
+                    movies=new_movies,
+                    current_index=0,
+                    message_id=message.message_id,
+                    chat_id=message.chat.id
+                )
+                await callback.answer()
+                return
+            
+            await callback.answer("Не удалось получить рекомендации. Пробуем ещё раз...")
+            await callback.answer()
+
+    
 
 
 

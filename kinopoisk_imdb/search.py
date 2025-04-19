@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.orm_query import add_movie, get_movies_by_interaction, get_movie_from_db
+from database.orm_query import add_movie, get_movies_by_interaction, get_movie_from_db,  get_movies_from_db_by_imdb_list
 
 
 load_dotenv()
@@ -17,6 +17,19 @@ logger = logging.getLogger(__name__)
 
 API_KEY_OMDB = os.getenv('OMDB_API_KEY')
 API_KEY_KINOPOISK = os.getenv('KINOPOISK_API_KEY')
+
+imdb_cache = {}
+
+sem = asyncio.Semaphore(5)  
+
+async def safe_get_imdb_id(title: str) -> str | None:
+    if title in imdb_cache:
+        return imdb_cache[title]
+
+    async with sem:  # ограничим одновременные запросы
+        imdb_id = await get_imdb_id(title)
+        imdb_cache[title] = imdb_id
+        return imdb_id
 
 
 async def get_imdb_id(movie_title: str):
@@ -59,72 +72,71 @@ async def get_movie_info(imdb_id: str) -> dict:
         return None
 
 
-async def find_in_ombd(movie_list: list, user_id: int, session: AsyncSession):
-    #logger.info(f"Полученный список фильмов: {movie_list}")
-
+async def find_in_imbd(movie_list: list, user_id: int, session: AsyncSession):
     if not movie_list:
         logger.warning("Получен пустой список фильмов")
         return {}
-    
+
     movie_imdb_ids = {}
-    tasks = []
 
-    # Получаем список уже рекомендованных фильмов для пользователя
-    recommended_movies = await get_movies_by_interaction(user_id=user_id, session=session, interaction_types=['liked', 'disliked', 'skipped'])
-    #logger.debug(f"Уже рекомендованные фильмы: {recommended_movies}")
-
+    # Получаем список уже рекомендованных фильмов
+    recommended_movies = await get_movies_by_interaction(
+        user_id=user_id, session=session,
+        interaction_types=['liked', 'disliked', 'skipped']
+    )
     recommended_imdb_ids = {movie.imdb for movie in recommended_movies}
-    #logger.debug(f"Рекомендованные IMDB ID: {recommended_imdb_ids}")
 
-    # Формируем задачи для асинхронных запросов
-    for movie in movie_list:
-        tasks.append(get_imdb_id(movie))
-
-    # Выполняем все задачи одновременно
+    # Формируем задачи
+    tasks = [safe_get_imdb_id(movie) for movie in movie_list]
     imdb_ids = await asyncio.gather(*tasks)
 
-    # Сохраняем результаты
-    for i, movie in enumerate(movie_list):
-        imdb_id = imdb_ids[i]
+    # Обрабатываем результаты
+    for movie, imdb_id in zip(movie_list, imdb_ids):
+        if imdb_id and imdb_id not in recommended_imdb_ids:
+            movie_imdb_ids[movie] = imdb_id
 
-        # Пропускаем фильмы, которые уже рекомендованы или не имеют IMDB ID
-        if imdb_id in recommended_imdb_ids or not imdb_id:
-            continue
-            
-        movie_imdb_ids[movie] = imdb_id
-    
-    #logger.info(f"Полученный список с imdb id: {movie_imdb_ids}")
     return movie_imdb_ids
 
 
 
+async def fetch_movie_data(url, movie_title, session, retries=2):
+    for attempt in range(retries + 1):
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    return await response.json()
+                logger.error(f"[{attempt+1}] Ошибка запроса для {movie_title}: {response.status}")
+        except asyncio.TimeoutError:
+            logger.warning(f"[{attempt+1}] Таймаут для {movie_title}")
+        except Exception as e:
+            logger.error(f"[{attempt+1}] Ошибка при получении {movie_title}: {e}")
+        await asyncio.sleep(1)  # Короткая пауза
+    return None
 
-async def fetch_movie_data(url, movie_title, session):
-    try:
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.json()
-                return data
-            else:
-                logger.error(f"Ошибка запроса для {movie_title}: {response.status}")
-                return None
-    except Exception as e:
-        logger.error(f"Ошибка при получении данных для {movie_title}: {e}")
-        return None
 
+semaphore = asyncio.Semaphore(5)
+async def limited_fetch(url, movie_title, session):
+    async with semaphore:
+        return await fetch_movie_data(url, movie_title, session)
 
+timeout = aiohttp.ClientTimeout(total=5)
 async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
     movies_data = {}
     movies_to_fetch = {}
 
-    # Сначала проверяем наличие фильмов в базе данных
+    # Фильтруем ID, которые точно не 'Not Found'
+    valid_imdb_ids = [imdb for imdb in movie_imdb_ids.values() if imdb != 'Not Found']
+
+    # Получаем все фильмы из базы одним запросом
+    movies_from_db = await get_movies_from_db_by_imdb_list(valid_imdb_ids, session)
+
     for movie, imdb_id in movie_imdb_ids.items():
         if imdb_id == 'Not Found':
             continue
-            
-        movie_from_db = await get_movie_from_db(imdb_id, session)
+
+        movie_from_db = movies_from_db.get(imdb_id)
         if movie_from_db:
-            # Если фильм есть в базе, формируем данные из базы
+            # Используем из БД
             movies_data[movie] = {
                 'imdb_id': imdb_id,
                 'data': {
@@ -140,14 +152,14 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                 }
             }
         else:
-            # Если фильма нет в базе, добавляем в список для поиска
             movies_to_fetch[movie] = imdb_id
 
-    # Если есть фильмы для поиска в Кинопоиске
+    # Только те фильмы, которых не было в БД
     if movies_to_fetch:
-        async with aiohttp.ClientSession() as session_http:
+       # Вставляется туда, где начинается "if movies_to_fetch:"
+        async with aiohttp.ClientSession(timeout=timeout) as session_http:
             tasks = [
-                fetch_movie_data(
+                limited_fetch(
                     f'https://api.kinopoisk.dev/v1.4/movie?externalId.imdb={imdb_id}&token={API_KEY_KINOPOISK}',
                     movie,
                     session_http
@@ -156,9 +168,8 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
             ]
             movie_data = await asyncio.gather(*tasks)
 
-           # Обрабатываем полученные данные и добавляем в базу
+
             for data, (movie, imdb_id) in zip(movie_data, movies_to_fetch.items()):
-                # Проверка валидности данных
                 if (
                     not data or
                     'docs' not in data or
@@ -175,11 +186,8 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                     continue
 
                 movie_info = data['docs'][0]
-
-                # Добавляем данные для дальнейшей обработки
                 movies_data[movie] = {'imdb_id': imdb_id, 'data': data}
 
-                # Добавляем в базу
                 try:
                     await add_movie(
                         movie_id=imdb_id,
@@ -196,13 +204,10 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                 except Exception as e:
                     logger.error(f"Ошибка при добавлении фильма {movie} в базу данных: {e}")
 
-
     return movies_data
 
-
-
 async def get_movies(movies_list, user_id, session: AsyncSession):
-    movie_imdb_ids = await find_in_ombd(movies_list, user_id, session)
+    movie_imdb_ids = await find_in_imbd(movies_list, user_id, session)
     movies_data = await find_in_kinopoisk_by_imdb(movie_imdb_ids, session)
     return movies_data
 
@@ -256,45 +261,4 @@ async def extract_movie_data(movies_data):
     #logger.info(f"Результат Extracted movie data: {movie_info_list}")
     return movie_info_list
 
-
-async def check_movie():
-    pass
-
-#FOR FAVOURITES
-async def find_by_imdb(movie_imdb_ids):
-    #logger.info(f"Полученные фильмы в функцию: {movie_imdb_ids}")
-
-    movies_data = {}
-
-    tasks = []
-    for imdb_id in movie_imdb_ids:
-        if imdb_id != 'Not Found':
-            url = f'https://api.kinopoisk.dev/v1.4/movie?externalId.imdb={imdb_id}&token={API_KEY_KINOPOISK}'
-            tasks.append(fetch_data(url))
-
-    movie_data = await asyncio.gather(*tasks)
-    for data, imdb_id in zip(movie_data, movie_imdb_ids):
-        if data:
-            movies_data[imdb_id] = {'imdb_id': imdb_id, 'data': data}
-        else:
-            movies_data[imdb_id] = {'imdb_id': imdb_id, 'data': 'Not Found'}
-    #logger.info(f"Найденные фильмы по id: {movies_data}")
-
-    return movies_data
-
-
-async def fetch_data(url):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-
-                    return data
-                else:
-                    logger.warning(f"Failed to fetch data for URL: {url}, Status: {response.status}")
-                    return None
-    except Exception as e:
-        logger.error(f"Error fetching data: {e}")
-        return None
 
