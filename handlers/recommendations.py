@@ -170,7 +170,7 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
                     text="Рекомендации остановлены. Возвращайтесь, когда захотите!",
                     reply_markup=get_callback_btns(btns={
                         "Мой профиль": "my_profile",
-                        "Избранное": "favorites",
+                        "Избранное": "favourites",
                         "Рекомендации": "recommendations"
                     })
                 )

@@ -54,9 +54,9 @@ async def send_favourites(callback: CallbackQuery, session: AsyncSession, bot: B
         google_search_url = f"https://www.google.com/search?q=смотреть+фильм+{title.replace(' ', '+')}"
 
         movie_list.append(
-            f"<b>{i}. 🎬 <a href='{google_search_url}'>{title}</a></b>\n"
-            f"   📅 <i>{year} год</i>\n"
-            f"   ⭐ <i>Рейтинг: {rating if rating > 0 else 'Нет данных'}</i>"
+            f"<b>{i}. 🎬 <a href='{google_search_url}'>{title}</a></b>,"
+            f" <i>{year} год</i>,"
+            f" <i>Рейтинг: {rating if rating > 0 else 'Нет данных'}</i>"
         )
 
     if movie_list:
@@ -66,12 +66,12 @@ async def send_favourites(callback: CallbackQuery, session: AsyncSession, bot: B
         pagination_buttons = []
 
         if page > 1:
-            pagination_buttons.append(InlineKeyboardButton(text='⏮️ В начало', callback_data='page_1'))
-            pagination_buttons.append(InlineKeyboardButton(text='◀️ Назад', callback_data=f'page_{page - 1}'))
+            pagination_buttons.append(InlineKeyboardButton(text='⏮️', callback_data='page_1'))
+            pagination_buttons.append(InlineKeyboardButton(text='◀️', callback_data=f'page_{page - 1}'))
 
         if page < total_pages:
-            pagination_buttons.append(InlineKeyboardButton(text='▶️ Вперед', callback_data=f'page_{page + 1}'))
-            pagination_buttons.append(InlineKeyboardButton(text='⏩ В конец', callback_data=f'page_{total_pages}'))
+            pagination_buttons.append(InlineKeyboardButton(text='▶️', callback_data=f'page_{page + 1}'))
+            pagination_buttons.append(InlineKeyboardButton(text='⏩', callback_data=f'page_{total_pages}'))
 
         pagination_markup = InlineKeyboardMarkup(inline_keyboard=[
             pagination_buttons,
