@@ -10,19 +10,41 @@ logger = logging.getLogger(__name__)
 
 #функция для добавления ответов пользователя в базу
 async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
-    obj  = Users_anketa(
-        user_id=user_id,
-        user_rec_status=True,
-        ans1=data['q1'],
-        ans2=data['q2'],
-        ans3=data['q3'],
-        ans4=data['q4'],
-        ans5=data['q5'],
-        ans6=data['q6'],
-        ans7=data['q7'],
-    )
-    session.add(obj)
-    await session.commit()
+    try:
+        query = select(Users_anketa).where(Users_anketa.user_id == user_id)
+        existing = await session.scalar(query)
+
+        if existing:
+            # Обновляем существующую анкету
+            existing.user_rec_status = True
+            existing.ans1 = data['q1']
+            existing.ans2 = data['q2']
+            existing.ans3 = data['q3']
+            existing.ans4 = data['q4']
+            existing.ans5 = data['q5']
+            existing.ans6 = data['q6']
+            existing.ans7 = data['q7']
+        else:
+            # Вставляем новую анкету
+            new_obj = Users_anketa(
+                user_id=user_id,
+                user_rec_status=True,
+                ans1=data['q1'],
+                ans2=data['q2'],
+                ans3=data['q3'],
+                ans4=data['q4'],
+                ans5=data['q5'],
+                ans6=data['q6'],
+                ans7=data['q7'],
+            )
+            session.add(new_obj)
+
+        await session.commit()
+
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Ошибка при добавлении/обновлении анкеты пользователя {user_id}: {e}")
+        raise e
 
 
 

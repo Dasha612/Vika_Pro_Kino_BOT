@@ -140,24 +140,23 @@ async def cancel_cmd(message: types.Message, state: FSMContext):
 async def handle_back(callback: CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
 
-    if current_state == Anketa.question_1.state:
+    states_list = Anketa.__all_states__
+    current_index = next((i for i, step in enumerate(states_list) if step.state == current_state), None)
+
+    if current_index is None or current_index == 0:
         await callback.message.answer("Ты на первом вопросе. Назад нельзя 🧱")
         await callback.answer()
         return
 
-    previous_state = None
-    for step in Anketa.__all_states__:
-        if step.state == current_state:
-            if previous_state:
-                await state.set_state(previous_state)
-                await callback.message.edit_text(
-                    questions[previous_state.index],
-                    reply_markup=get_callback_btns(btns={"Назад": "Назад"})
-                )
-            break
-        previous_state = step
+    previous_state = states_list[current_index - 1]
+    await state.set_state(previous_state)
+    await callback.message.edit_text(
+        questions[current_index - 1],
+        reply_markup=get_callback_btns(btns={"Назад": "Назад"})
+    )
 
     await callback.answer()
+
 
 
 
@@ -240,7 +239,7 @@ async def main_page(callback: CallbackQuery):
 @anketa_router.callback_query(F.data == 'reset_anketa')
 async def reset_anketa_handler(callback: CallbackQuery, session: AsyncSession):
     user_id = callback.from_user.id
-    result = await reset_anketa_in_db(user_id, session)
+    await reset_anketa_in_db(user_id, session)
 
     await callback.message.edit_text(text='Анкета сброшена', reply_markup=get_callback_btns(
         btns={
