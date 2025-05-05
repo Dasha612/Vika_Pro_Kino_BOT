@@ -183,8 +183,18 @@ async def get_user_preferences(user_id: int, session: AsyncSession):
 
 
 
-#функция для добавления фильма в базу
-async def add_movie(movie_id: str, movie_name: str, movie_description: str, movie_rating: float, movie_poster: str, movie_year: int, movie_genre: str, movie_duration: int, session: AsyncSession):
+async def add_movie(
+    movie_id: str,
+    movie_name: str,
+    movie_description: str,
+    movie_rating: float,
+    movie_poster: str,
+    movie_year: int,
+    movie_genre: str,
+    movie_duration: str,  # строка, а не int
+    movie_type: str,      # 👈 добавлено
+    session: AsyncSession
+):
     obj = Movies(
         imdb=movie_id,
         movie_name=movie_name,
@@ -194,10 +204,11 @@ async def add_movie(movie_id: str, movie_name: str, movie_description: str, movi
         movie_rating=movie_rating,
         movie_genre=movie_genre,
         movie_duration=movie_duration,
-
+        movie_type=movie_type     # 👈 передаём в БД
     )
     session.add(obj)
     await session.commit()
+
 
 
 

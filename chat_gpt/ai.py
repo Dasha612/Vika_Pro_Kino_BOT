@@ -77,7 +77,7 @@ async def get_movie_recommendation_by_preferences(user_id: int, session=AsyncSes
                 "content": str(text)
             }
         ],
-        model='gpt-4o-mini-2024-07-18'
+        model='gpt-4o'
     )
 
     content = response.choices[0].message.content
@@ -135,7 +135,7 @@ async def get_movie_recommendation_by_interaction(user_id: int, session: AsyncSe
                     "content": str(text)
                 }
             ],
-            model='gpt-4o-mini-2024-07-18'
+            model='gpt-4o'
         )
         logger.info(f"Response from movie_rec: {response}")
 
@@ -150,4 +150,35 @@ async def get_movie_recommendation_by_interaction(user_id: int, session: AsyncSe
         logger.info("Недостаточно взаимодействий.\nВызываем рекомендации по анкете")
         logger.info("_" * 100)
         return await get_movie_recommendation_by_preferences(user_id=user_id, session=session)
+
+
+
+
+async def get_movie_recommendation_by_search(user_id: int, text: str, session: AsyncSession):
+    logger.info("_" * 100)
+    logger.info(f"Запрос пользователя: {text}")
+    
+    response = await client.chat.completions.create(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a movie recommendation system. Based on user request, "
+                    "recommend 10 movies/series (Depending on what the user requests).\n\n"
+                    "All recommended movie titles must be written strictly in English. "
+                    "Return the recommendations in the format of a Python list: Movies = [ ], containing only the movie titles as strings and nothing else."
+                )   
+            },
+            {
+                "role": "user",
+                "content": str(f"Find movies that match user's request: {text}")
+            }
+        ],
+        model='gpt-4o'
+    )
+
+    content = response.choices[0].message.content
+    logger.info(f"Extracted CHAT GPT data: {content}")
+    logger.info("_" * 100)
+    return extract_movies_from_gpt_response(content)
 

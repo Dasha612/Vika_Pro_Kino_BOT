@@ -28,7 +28,9 @@ class Movies(Base):
     movie_poster: Mapped[str] = mapped_column(String, nullable=False)
     movie_year: Mapped[int] = mapped_column(Integer, nullable=False)
     movie_genre: Mapped[str] = mapped_column(String, nullable=False)
-    movie_duration: Mapped[int] = mapped_column(Integer, nullable=False)
+    movie_duration: Mapped[str] = mapped_column(String, nullable=False)
+    movie_type: Mapped[str] = mapped_column(String, nullable=True)
+
 
 
 

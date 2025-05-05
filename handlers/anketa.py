@@ -123,7 +123,7 @@ async def set_q7(message: types.Message, state: FSMContext, bot: Bot, session: A
     current_state = await state.get_state()
 
     logger.info(f"STATE: {current_state}\n")
-    await message.answer('Начать рекомендации?', reply_markup=get_callback_btns(btns={"Давай": "recommendations", 'Нет, я хочу вернуться в меню': 'my_profile'}))
+    await message.answer('Выбери, что ты хочешь сделать', reply_markup=get_callback_btns(btns={"Запуск рекомендаций": "recommendations", "Свой запрос": "search_movie", 'Вернуться в меню': 'my_profile'}))
 
         
 
@@ -173,7 +173,7 @@ async def start_cmd(message: types.Message, session: AsyncSession, state: FSMCon
             btns={
                 "Мой профиль": "my_profile",
                 "Избранное": "favourites",
-                "Рекомендации": "recommendations"
+                "Рекомендации": "choose_option"
             }
         ))
     await state.update_data(start_message_id=start_message.message_id)
@@ -231,7 +231,7 @@ async def main_page(callback: CallbackQuery):
             btns={
                 "Мой профиль": "my_profile",
                 "Избранное": "favourites",
-                "Рекомендации": "recommendations"
+                "Рекомендации": "choose_option"
             }
         ))
 

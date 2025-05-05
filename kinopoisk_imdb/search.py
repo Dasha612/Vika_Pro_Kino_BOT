@@ -124,10 +124,7 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
     movies_data = {}
     movies_to_fetch = {}
 
-    # Фильтруем ID, которые точно не 'Not Found'
     valid_imdb_ids = [imdb for imdb in movie_imdb_ids.values() if imdb != 'Not Found']
-
-    # Получаем все фильмы из базы одним запросом
     movies_from_db = await get_movies_from_db_by_imdb_list(valid_imdb_ids, session)
 
     for movie, imdb_id in movie_imdb_ids.items():
@@ -136,7 +133,6 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
 
         movie_from_db = movies_from_db.get(imdb_id)
         if movie_from_db:
-            # Используем из БД
             movies_data[movie] = {
                 'imdb_id': imdb_id,
                 'data': {
@@ -147,16 +143,15 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                         'poster': {'url': movie_from_db.movie_poster},
                         'year': movie_from_db.movie_year,
                         'genres': [{'name': genre} for genre in movie_from_db.movie_genre.split(', ')],
-                        'movieLength': movie_from_db.movie_duration
+                        'movieLength': movie_from_db.movie_duration,
+                        'type': movie_from_db.movie_type  # если ты хранишь тип в БД
                     }]
                 }
             }
         else:
             movies_to_fetch[movie] = imdb_id
 
-    # Только те фильмы, которых не было в БД
     if movies_to_fetch:
-       # Вставляется туда, где начинается "if movies_to_fetch:"
         async with aiohttp.ClientSession(timeout=timeout) as session_http:
             tasks = [
                 limited_fetch(
@@ -167,7 +162,6 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                 for movie, imdb_id in movies_to_fetch.items()
             ]
             movie_data = await asyncio.gather(*tasks)
-
 
             for data, (movie, imdb_id) in zip(movie_data, movies_to_fetch.items()):
                 if (
@@ -186,6 +180,22 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                     continue
 
                 movie_info = data['docs'][0]
+
+                # 💡 Новый блок: определяем длительность
+                movie_length = movie_info.get('movieLength')
+                series_length = movie_info.get('seriesLength')
+                duration = None
+
+                if movie_length:
+                    duration = f"{movie_length} min"
+                elif series_length:
+                    duration = f"{series_length} min"
+                else:
+                    duration = "0 min"
+
+                # 💡 Новый блок: определяем тип (фильм или сериал)
+                movie_type = movie_info.get('type') or "movie"  # 'movie', 'tv-series', 'animated-series' и т.д.
+
                 movies_data[movie] = {'imdb_id': imdb_id, 'data': data}
 
                 try:
@@ -197,12 +207,14 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                         movie_poster=movie_info.get('poster', {}).get('url', ''),
                         movie_year=movie_info.get('year', 0),
                         movie_genre=', '.join([genre['name'] for genre in movie_info.get('genres', [])]),
-                        movie_duration=movie_info.get('movieLength', 0),
+                        movie_duration=duration,  # передаём уже строку с мин.
+                        movie_type=movie_type,    # 👈 передаём тип контента
                         session=session
                     )
                     logger.info(f"Фильм {movie} успешно добавлен в базу данных")
                 except Exception as e:
                     logger.error(f"Ошибка при добавлении фильма {movie} в базу данных: {e}")
+                    await session.rollback()
 
     return movies_data
 
@@ -214,41 +226,53 @@ async def get_movies(movies_list, user_id, session: AsyncSession):
 
 
 async def extract_movie_data(movies_data):
-    #logger.info(f"Полученные данные для извлечения в extract_movie_data: {movies_data}")
     movie_info_list = []  # Список для хранения данных о фильмах
+
     for movie, data in movies_data.items():
         docs = data['data'].get('docs', []) if data['data'] != 'Not Found' else []
 
-        if docs:  # Проверяем, есть ли данные в docs
+        if docs:
             movie_info = docs[0]
             title_russian = movie_info.get('name', 'N/A')
             year = movie_info.get('year', 'Unknown')
             poster_url = movie_info.get('poster', {}).get('url', 'No image available')
             description = (
-                    movie_info.get('shortDescription') or
-                    movie_info.get('description') or
-                    'Описание недоступно'
+                movie_info.get('shortDescription') or
+                movie_info.get('description') or
+                'Описание недоступно'
             ).strip()
-
             rating = movie_info.get('rating', {}).get('kp', 'No rating available')
             genres = ', '.join([genre.get('name', 'Unknown') for genre in movie_info.get('genres', [])])
-            duration = movie_info.get('movieLength', 'N/A')
-            duration_text = f"{duration} min" if isinstance(duration, int) else duration
+
+            # 💡 Определяем длительность
+            movie_length = movie_info.get('movieLength')
+            series_length = movie_info.get('seriesLength')
+            if movie_length:
+                duration = f"{movie_length} min"
+            elif series_length:
+                duration = f"{series_length} min"
+            else:
+                duration = 'N/A'
+
+            # 💡 Определяем тип (movie, tv-series и т.д.)
+            movie_type = movie_info.get('type', 'unknown')
 
             movie_info_list.append({
                 'movie_id': data['imdb_id'],
+                'type': movie_type,
                 'title': title_russian,
                 'year': year,
                 'poster': poster_url,
                 'description': description,
                 'rating': rating,
                 'genres': genres,
-                'duration': duration_text,
+                'duration': duration,
             })
         else:
-            # Если данные отсутствуют
+            # Если данных по фильму нет
             movie_info_list.append({
                 'movie_id': data['imdb_id'],
+                'type': 'unknown',
                 'title': movie,
                 'year': 'Not Found',
                 'poster': 'No image available',
@@ -258,7 +282,6 @@ async def extract_movie_data(movies_data):
                 'duration': 'Not Found',
             })
 
-    #logger.info(f"Результат Extracted movie data: {movie_info_list}")
     return movie_info_list
 
 
