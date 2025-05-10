@@ -11,9 +11,9 @@ from database.orm_query import orm_add_user_rec_set, add_user
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
-from kbds.inline import get_callback_btns, subscribe_button
+from kbds.inline import get_callback_btns, subscribe_button, get_multi_select_keyboard
 from database.orm_query import check_recommendations_status, reset_anketa_in_db
-from chat_gpt.questions import questions
+from chat_gpt.questions import questions, QUESTION_KEYS, MULTI_OPTIONS, CALLBACK_IDS
 
 
 logging.basicConfig(level=logging.INFO)
@@ -29,103 +29,167 @@ class Anketa(StatesGroup):
     question_3 = State()
     question_4 = State()
     question_5 = State()
-    question_6 = State()
-    question_7 = State()
-
-
-
-
 
 @anketa_router.callback_query(StateFilter(None), F.data == "set_profile")
 async def registration_start(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer(questions[0])
-    await state.set_state(Anketa.question_1)
+    question_key = QUESTION_KEYS[0]
+    await state.set_state(getattr(Anketa, question_key))
+    markup = get_multi_select_keyboard(CALLBACK_IDS[question_key], set(), question_key)
+    await callback.message.edit_text(
+        questions[0],
+        reply_markup=markup
+    )
+
+    # Сохраняем message_id для последующего редактирования или удаления
+    await state.update_data(anketa_message_id=callback.message.message_id)
     await callback.answer()
 
-@anketa_router.message(Anketa.question_1, F.text)
-async def set_q1(message: types.Message, state: FSMContext):
-    await state.update_data(q1=message.text)
-    await message.answer(questions[1], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
-    await state.set_state(Anketa.question_2)
 
-@anketa_router.message(Anketa.question_1)
-async def set_q1(message: types.Message, state: FSMContext):
-    await message.answer("Пожалуйста, введите ответ в виде текста")
-
-@anketa_router.message(Anketa.question_2, F.text)
-async def set_q2(message: types.Message, state: FSMContext):
-    await state.update_data(q2=message.text)
-    await message.answer(questions[2], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
-    await state.set_state(Anketa.question_3)
-
-@anketa_router.message(Anketa.question_2)
-async def set_q2(message: types.Message, state: FSMContext):
-    await message.answer("Пожалуйста, введите ответ в виде текста")
-
-@anketa_router.message(Anketa.question_3, F.text)
-async def set_q3(message: types.Message, state: FSMContext):
-    await state.update_data(q3=message.text)
-    await message.answer(questions[3], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
-    await state.set_state(Anketa.question_4)
-
-@anketa_router.message(Anketa.question_3)
-async def set_q3(message: types.Message, state: FSMContext):
-    await message.answer("Пожалуйста, введите ответ в виде текста")
-
-@anketa_router.message(Anketa.question_4, F.text)
-async def set_q4(message: types.Message, state: FSMContext):
-    await state.update_data(q4=message.text)
-    await message.answer(questions[4], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
-    await state.set_state(Anketa.question_5)
-
-@anketa_router.message(Anketa.question_4)
-async def set_q4(message: types.Message, state: FSMContext):
-    await message.answer("Пожалуйста, введите ответ в виде текста")
-
-@anketa_router.message(Anketa.question_5, F.text)
-async def set_q5(message: types.Message, state: FSMContext):
-    await state.update_data(q5=message.text)
-    await message.answer(questions[5], reply_markup=get_callback_btns(btns={"Назад": "Назад"}))
-    await state.set_state(Anketa.question_6)
-
-@anketa_router.message(Anketa.question_5)
-async def set_q5(message: types.Message, state: FSMContext):
-    await message.answer("Пожалуйста, введите ответ в виде текста")
-
-@anketa_router.message(Anketa.question_6, F.text)
-async def set_q6(message: types.Message, state: FSMContext):
-    await state.update_data(q6=message.text)
-    await message.answer(questions[6], reply_markup=get_callback_btns(btns={"Назад": "Назад"}) )
-    await state.set_state(Anketa.question_7)
-
-@anketa_router.message(Anketa.question_6)
-async def set_q6(message: types.Message, state: FSMContext):
-    await message.answer("Пожалуйста, введите ответ в виде текста")
-
-
-@anketa_router.message(Anketa.question_7, F.text)
-async def set_q7(message: types.Message, state: FSMContext, bot: Bot, session: AsyncSession):
-    await state.update_data(q7=message.text)
-    user_data = await state.get_data()
+@anketa_router.callback_query(F.data.startswith("select:"))
+async def toggle_selection(callback: CallbackQuery, state: FSMContext):
     try:
-        await orm_add_user_rec_set(message.from_user.id, session, user_data)
+        _, question_key, option_key = callback.data.split(":")
+        option_text = CALLBACK_IDS[question_key][option_key]
     except Exception as e:
-        await message.answer(f"Ошибка при добавлении данных в базу: {e}")
+        logger.error(f"Ошибка разбора callback: {e}")
+        await callback.answer("Ошибка выбора")
+        return
 
+    data = await state.get_data()
+    selected = set(data.get(f"{question_key}_selected", []))
 
+    if option_text in selected:
+        selected.remove(option_text)
+    else:
+        selected.add(option_text)
+
+    await state.update_data(**{f"{question_key}_selected": list(selected)})
+
+    markup = get_multi_select_keyboard(CALLBACK_IDS[question_key], selected, question_key)
+    message_id = data.get("anketa_message_id")
+    if message_id:
+        await callback.bot.edit_message_reply_markup(
+            chat_id=callback.message.chat.id,
+            message_id=message_id,
+            reply_markup=markup
+        )
+    await callback.answer()
+
+@anketa_router.callback_query(F.data.startswith("done:"))
+async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    logger.info(f"Обработан callback: {callback.data}")
     
+    try:
+        question_key = callback.data.split(":")[1]
+        logger.info(f"Определен ключ вопроса: {question_key}")
+    except Exception as e:
+        logger.error(f"Ошибка при парсинге callback_data: {e}")
+        await callback.answer("Произошла ошибка")
+        return
 
-
-    await message.answer('Уфф...Все ответы записал.')
-    await asyncio.sleep(5)
-    await message.answer('Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить.', reply_markup=types.ReplyKeyboardRemove())
-    await asyncio.sleep(5)
     current_state = await state.get_state()
+    logger.info(f"Текущее состояние FSM: {current_state}")
 
-    logger.info(f"STATE: {current_state}\n")
-    await message.answer('Выбери, что ты хочешь сделать', reply_markup=get_callback_btns(btns={"Запуск рекомендаций": "recommendations", "Свой запрос": "search_movie", 'Вернуться в меню': 'my_profile'}))
+    if question_key not in QUESTION_KEYS:
+        logger.warning(f"Вопрос {question_key} не найден в списке QUESTION_KEYS")
+        await callback.answer("Неизвестный вопрос")
+        return
 
-        
+    next_index = QUESTION_KEYS.index(question_key) + 1
+    data = await state.get_data()
+    logger.info(f"Данные анкеты: {data}")
+    
+    message_id = data.get("anketa_message_id")
+    logger.info(f"ID сообщения с анкетой: {message_id}")
+
+    # Конец анкеты
+    if next_index >= len(QUESTION_KEYS):
+        logger.info("Анкета завершена, сохраняем в базу...")
+        try:
+            await orm_add_user_rec_set(callback.from_user.id, session, data)
+            logger.info("Анкета успешно записана в БД")
+        except Exception as e:
+            logger.exception(f"Ошибка при сохранении анкеты: {e}")
+            await callback.message.answer(f"Ошибка при сохранении анкеты: {e}")
+            return
+
+        if message_id:
+            try:
+                await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
+                await asyncio.sleep(1.2)
+                await callback.bot.edit_message_text(
+                    chat_id=callback.message.chat.id,
+                    message_id=message_id,
+                    text="Уфф... Все ответы записал 📝"
+                )
+                await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
+                await asyncio.sleep(1.2)
+                await callback.bot.edit_message_text(
+                    chat_id=callback.message.chat.id,
+                    message_id=message_id,
+                    text="Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить 👀"
+                )
+                await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
+                await asyncio.sleep(1.2)
+                await callback.bot.edit_message_text(
+                    chat_id=callback.message.chat.id,
+                    message_id=message_id,
+                    text="<b>Выбери, что ты хочешь сделать</b>",
+                    parse_mode="HTML",
+                    reply_markup=get_callback_btns(btns={
+                    "Запуск рекомендаций": "recommendations",
+                    "Свой запрос": "search_movie", 
+                    'Вернуться в меню': 'my_profile'
+                })
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось редактировать сообщение: {e}")
+                await callback.message.answer("Выбери, что ты хочешь сделать", reply_markup=get_callback_btns(btns={
+                    "Запуск рекомендаций": "recommendations",
+                    "Свой запрос": "search_movie", 
+                    'Вернуться в меню': 'my_profile'
+                }))
+        else:
+            logger.warning("message_id отсутствует, отправляем финальные сообщения как новые")
+            await callback.message.answer("Уфф... Все ответы записал 📝")
+            await asyncio.sleep(1.2)
+            await callback.message.answer("Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить 👀")
+            await asyncio.sleep(1.2)
+            await callback.message.answer(
+                "<b>Выбери, что ты хочешь сделать</b>",
+                parse_mode="HTML",
+                reply_markup=get_callback_btns(btns={
+                    "Запуск рекомендаций": "recommendations",
+                    "Свой запрос": "search_movie", 
+                    'Вернуться в меню': 'my_profile'
+                })
+            )
+
+        await state.clear()
+        await callback.answer()
+        return
+
+    # Переход к следующему вопросу
+    next_key = QUESTION_KEYS[next_index]
+    await state.set_state(getattr(Anketa, next_key))
+    markup = get_multi_select_keyboard(CALLBACK_IDS[next_key], set(), next_key)
+
+    if message_id:
+        await callback.bot.edit_message_text(
+            chat_id=callback.message.chat.id,
+            message_id=message_id,
+            text=questions[next_index],
+            reply_markup=markup
+        )
+    else:
+        sent = await callback.message.answer(questions[next_index], reply_markup=markup)
+        await state.update_data(anketa_message_id=sent.message_id)
+
+    await callback.answer()
+
+
+
+
 
 @anketa_router.message(StateFilter('*'), F.text == "Отмена")
 async def cancel_cmd(message: types.Message, state: FSMContext):

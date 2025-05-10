@@ -58,3 +58,17 @@ rate_buttons = InlineKeyboardMarkup(
         ]
     ]
 )
+
+
+def get_multi_select_keyboard(options_dict, selected_options, question_key):
+    keyboard = InlineKeyboardBuilder()
+    for option_key, option_text in options_dict.items():
+        prefix = "✅ " if option_text in selected_options else ""
+        callback_data = f"select:{question_key}:{option_key}"
+        keyboard.add(InlineKeyboardButton(text=prefix + option_text, callback_data=callback_data))
+    keyboard.add(InlineKeyboardButton(text="✅ Готово", callback_data=f"done:{question_key}"))
+    return keyboard.adjust(1).as_markup()
+
+
+
+

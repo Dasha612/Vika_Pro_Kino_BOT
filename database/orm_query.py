@@ -11,31 +11,35 @@ logger = logging.getLogger(__name__)
 #функция для добавления ответов пользователя в базу
 async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
     try:
+        def get_answer(key: str) -> str:
+            return ", ".join(data.get(f"{key}_selected", []))
+
+        # Подготавливаем данные
+        mood = get_answer("question_1")
+        genres = get_answer("question_2")
+        era = get_answer("question_3")
+        duration = get_answer("question_4")
+        themes = get_answer("question_5")
+
         query = select(Users_anketa).where(Users_anketa.user_id == user_id)
         existing = await session.scalar(query)
 
         if existing:
-            # Обновляем существующую анкету
             existing.user_rec_status = True
-            existing.ans1 = data['q1']
-            existing.ans2 = data['q2']
-            existing.ans3 = data['q3']
-            existing.ans4 = data['q4']
-            existing.ans5 = data['q5']
-            existing.ans6 = data['q6']
-            existing.ans7 = data['q7']
+            existing.mood = mood
+            existing.genres = genres
+            existing.era = era
+            existing.duration = duration
+            existing.themes = themes
         else:
-            # Вставляем новую анкету
             new_obj = Users_anketa(
                 user_id=user_id,
                 user_rec_status=True,
-                ans1=data['q1'],
-                ans2=data['q2'],
-                ans3=data['q3'],
-                ans4=data['q4'],
-                ans5=data['q5'],
-                ans6=data['q6'],
-                ans7=data['q7'],
+                mood=mood,
+                genres=genres,
+                era=era,
+                duration=duration,
+                themes=themes,
             )
             session.add(new_obj)
 
@@ -45,6 +49,7 @@ async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
         await session.rollback()
         logger.error(f"Ошибка при добавлении/обновлении анкеты пользователя {user_id}: {e}")
         raise e
+
 
 
 
@@ -239,13 +244,12 @@ async def reset_anketa_in_db(user_id: int, session: AsyncSession):
         
         # Сбрасываем все поля анкеты на начальные значения
         anketa.user_rec_status = False  # Статус рекомендаций
-        anketa.ans1 = ""
-        anketa.ans2 = ""
-        anketa.ans3 = ""
-        anketa.ans4 = ""
-        anketa.ans5 = ""
-        anketa.ans6 = ""
-        anketa.ans7 = ""
+        anketa.mood = ""
+        anketa.genres = ""
+        anketa.era = ""
+        anketa.duration = ""
+        anketa.themes = ""
+    
         
         # Сохраняем изменения в базе данных
         await session.commit()

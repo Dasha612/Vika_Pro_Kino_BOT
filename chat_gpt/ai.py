@@ -38,18 +38,16 @@ async def get_movie_recommendation_by_preferences(user_id: int, session=AsyncSes
         "rec3": "Ответ отсутствует",
         "rec4": "Ответ отсутствует",
         "rec5": "Ответ отсутствует",
-        "rec6": "Ответ отсутствует",
-        "rec7": "Ответ отсутствует",    
+    
     }
     if preferences:
         answers.update({
-            "rec1": preferences.ans1 or "Ответ отсутствует",
-            "rec2": preferences.ans2 or "Ответ отсутствует",
-            "rec3": preferences.ans3 or "Ответ отсутствует",
-            "rec4": preferences.ans4 or "Ответ отсутствует",
-            "rec5": preferences.ans5 or "Ответ отсутствует",
-            "rec6": preferences.ans6 or "Ответ отсутствует",
-            "rec7": preferences.ans7 or "Ответ отсутствует",
+            "rec1": preferences.mood or "Ответ отсутствует",
+            "rec2": preferences.genres or "Ответ отсутствует",
+            "rec3": preferences.era or "Ответ отсутствует",
+            "rec4": preferences.duration or "Ответ отсутствует",
+            "rec5": preferences.themes or "Ответ отсутствует",
+
         })
     
     # Формирование текста для GPT

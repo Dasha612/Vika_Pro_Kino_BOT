@@ -43,13 +43,11 @@ class Users_anketa(Base):
 
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id"), primary_key=True, index=True)
     user_rec_status: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    ans1: Mapped[str] = mapped_column(String, nullable=False)
-    ans2: Mapped[str] = mapped_column(String, nullable=False)
-    ans3: Mapped[str] = mapped_column(String, nullable=False)
-    ans4: Mapped[str] = mapped_column(String, nullable=False)
-    ans5: Mapped[str] = mapped_column(String, nullable=False)
-    ans6: Mapped[str] = mapped_column(String, nullable=False)
-    ans7: Mapped[str] = mapped_column(String, nullable=False)
+    mood: Mapped[str] = mapped_column(String, nullable=False)
+    genres: Mapped[str] = mapped_column(String, nullable=False)
+    era: Mapped[str] = mapped_column(String, nullable=False)
+    duration: Mapped[str] = mapped_column(String, nullable=False)
+    themes: Mapped[str] = mapped_column(String, nullable=False)
 
     user: Mapped[Users] = relationship(backref="anketa")
 

@@ -118,7 +118,7 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
 
     recommendations_status = await check_recommendations_status(user_id, session)
     if not recommendations_status:
-        await callback.message.answer(
+        await callback.message.edit_text(
             "Прежде чем порекомендовать тебе фильм, мне нужно узнать о тебе больше информации. Давай заполним анкету?",
             reply_markup=get_callback_btns(btns={"Давай": "set_profile"})
         )
