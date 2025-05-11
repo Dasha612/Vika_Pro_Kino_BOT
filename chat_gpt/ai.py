@@ -87,21 +87,18 @@ async def get_movie_recommendation_by_preferences(user_id: int, session=AsyncSes
 
 
 async def get_movie_recommendation_by_interaction(user_id: int, session: AsyncSession):
-    liked_movies = await get_movies_by_interaction(user_id, session, ['like'])
-    watched_movies = await get_movies_by_interaction(user_id, session, ['watched'])
+    liked_movies = await get_movies_by_interaction(user_id, session, ['liked'])
 
-    if len(watched_movies) >= 5 or len(liked_movies) >= 5:
+
+    if len(liked_movies) >= 5:
         logger.info("_" * 100)
         logger.info("Вызываем рекомендации на основе пред рекомендаций")
-
-        watched_movies = watched_movies[-5:]
         liked_movies = liked_movies[-5:]
-        # Логирование для проверки
-        logger.info(f"Просмотренные фильмы: {watched_movies}")
+
         logger.info(f"Понравившиеся фильмы: {liked_movies}")
         logger.info("_" * 100)
 
-        movies = watched_movies + liked_movies
+        movies = liked_movies
         
         unique_movies = {}
         for movie in movies:

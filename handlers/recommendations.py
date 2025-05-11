@@ -37,7 +37,8 @@ async def options(callback: CallbackQuery, session: AsyncSession, bot: Bot, stat
         reply_markup=get_callback_btns(
             btns={
                 "Запуск рекомендаций": "recommendations",
-                "Свой запрос": "search_movie"
+                "Свой запрос": "search_movie",
+                'Вернуться в меню': 'to_the_main_page'
             }
         )
     )
@@ -67,10 +68,6 @@ async def process_search_query(message: types.Message, state: FSMContext, sessio
         if chat_gpt_response:
             movies_data = await get_movies(chat_gpt_response, user_id, session)
             movies = await extract_movie_data(movies_data)
-
-            logger.info("_" * 100)
-            logger.info(f"Отправка фильмов пользователю из функции extract_movie_data: {movies}")
-            logger.info("_" * 100)
 
             retries += 1
         if retries >= max_retries: 
@@ -111,10 +108,9 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
     await asyncio.sleep(1) 
 
     current_state = await state.get_state()
-    logger.info(f"STATE: {current_state}\n")
 
     user_id = callback.from_user.id
-    logger.info(f"Запрос рекомендаций от пользователя {user_id}")
+
 
     recommendations_status = await check_recommendations_status(user_id, session)
     if not recommendations_status:
@@ -127,12 +123,7 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
     unwatched_movies  = await get_movies_by_interaction(user_id, session,['unwatched'])
 
     if unwatched_movies:
-        # Если есть непросмотренные фильмы, показываем их
-        logger.info("_" * 100)
-        logger.info(f"Отправка непросмотренных фильмов пользователю {user_id}, {unwatched_movies}")
-        logger.info("_" * 100)
-  
-        
+
         # Отправляем первый непросмотренный фильм
         message = await send_movie_card(callback.message, unwatched_movies[0], 0, custom_keyboard=create_movie_carousel_keyboard)
             
@@ -159,9 +150,6 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
             movies_data = await get_movies(chat_gpt_response, user_id, session)
             movies = await extract_movie_data(movies_data)
 
-            logger.info("_" * 100)
-            logger.info(f"Отправка фильмов пользователю из функции extract_movie_data: {movies}")
-            logger.info("_" * 100)
 
             retries += 1
         if retries >= max_retries: 
@@ -216,7 +204,7 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
     logger.info("_" * 100)
 
     last_action = data.get("last_action", "")
-    logger.info(f"Last action before checking: {last_action}, current action: {action}")
+
 
     if last_action == "watched":
         await state.set_state(Recomendations.waiting_for_action.state)
@@ -244,7 +232,7 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
                     reply_markup=get_callback_btns(btns={
                         "Мой профиль": "my_profile",
                         "Избранное": "favourites",
-                        "Рекомендации": "recommendations"
+                        "Рекомендации": "choose_option"
                     })
                 )
             except Exception as e:
@@ -256,7 +244,7 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
                     reply_markup=get_callback_btns(btns={
                         "Мой профиль": "my_profile",
                         "Избранное": "favorites",
-                        "Рекомендации": "recommendations"
+                        "Рекомендации": "choose_option"
                     })
                 )
 
@@ -297,11 +285,6 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
             chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session)
             movies_data = await get_movies(chat_gpt_response, user_id, session)
             new_movies = await extract_movie_data(movies_data)
-
-            logger.info("_" * 100)
-            logger.info(f"Отправка фильмов пользователю из функции extract_movie_data: {new_movies}")
-            logger.info("_" * 100)
-            
             if new_movies:
                 message = await send_movie_card(callback.message, new_movies[0], 0, edit=True, custom_keyboard=create_movie_carousel_keyboard)
 
@@ -329,9 +312,6 @@ async def handle_rating(callback: types.CallbackQuery, state: FSMContext, sessio
     movie = movies[current_index]
     user_id = callback.from_user.id
 
-    logger.info("_" * 100)
-    logger.info(f"Пользователь оценил фильм: {movie} на {user_rating}")
-    logger.info("_" * 100)
     movie_id = movie.imdb if hasattr(movie, 'imdb') else movie.get('movie_id')
 
     if user_rating >= 4:
@@ -355,10 +335,6 @@ async def handle_rating(callback: types.CallbackQuery, state: FSMContext, sessio
             chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session)
             movies_data = await get_movies(chat_gpt_response, user_id, session)
             new_movies = await extract_movie_data(movies_data)
-
-            logger.info("_" * 100)
-            logger.info(f"Отправка фильмов пользователю из функции extract_movie_data: {new_movies}")
-            logger.info("_" * 100)
             
             if new_movies:
                 message = await send_movie_card(callback.message, new_movies[0], 0, edit=True, custom_keyboard=create_movie_carousel_keyboard)

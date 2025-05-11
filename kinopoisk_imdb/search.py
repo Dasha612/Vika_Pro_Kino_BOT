@@ -48,28 +48,7 @@ async def get_imdb_id(movie_title: str):
         return None
 
 
-async def get_movie_info(imdb_id: str) -> dict:
-    """Получает детальную информацию о фильме из OMDB API"""
-    url = f'http://www.omdbapi.com/?i={imdb_id}&apikey={API_KEY_OMDB}'
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                data = await response.json()
-                if data['Response'] == 'True':
-                    return {
-                        'name': data.get('Title', ''),
-                        'description': data.get('Plot', ''),
-                        'rating': float(data.get('imdbRating', 0)),
-                        'poster': data.get('Poster', ''),
-                        'year': int(data.get('Year', 0)),
-                        'genre': data.get('Genre', ''),
-                        'duration': int(data.get('Runtime', '0').replace(' min', '')),
-                        'country': data.get('Country', '')
-                    }
-                return None
-    except Exception as e:
-        logger.error(f"Ошибка при получении информации о фильме {imdb_id}: {e}")
-        return None
+
 
 
 async def find_in_imbd(movie_list: list, user_id: int, session: AsyncSession):
@@ -82,9 +61,11 @@ async def find_in_imbd(movie_list: list, user_id: int, session: AsyncSession):
     # Получаем список уже рекомендованных фильмов
     recommended_movies = await get_movies_by_interaction(
         user_id=user_id, session=session,
-        interaction_types=['liked', 'disliked', 'skipped']
+        interaction_types=['liked', 'disliked', 'skipped', 'watched']
     )
+
     recommended_imdb_ids = {movie.imdb for movie in recommended_movies}
+    #logger.info(f"ID рекомендованных фильмов: {recommended_imdb_ids}.\n")
 
     # Формируем задачи
     tasks = [safe_get_imdb_id(movie) for movie in movie_list]
@@ -94,6 +75,8 @@ async def find_in_imbd(movie_list: list, user_id: int, session: AsyncSession):
     for movie, imdb_id in zip(movie_list, imdb_ids):
         if imdb_id and imdb_id not in recommended_imdb_ids:
             movie_imdb_ids[movie] = imdb_id
+
+    logger.info(f"финальный список фильмов после сортировки: {movie_imdb_ids}.")
 
     return movie_imdb_ids
 
@@ -211,7 +194,7 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                         movie_type=movie_type,    # 👈 передаём тип контента
                         session=session
                     )
-                    logger.info(f"Фильм {movie} успешно добавлен в базу данных")
+              
                 except Exception as e:
                     logger.error(f"Ошибка при добавлении фильма {movie} в базу данных: {e}")
                     await session.rollback()

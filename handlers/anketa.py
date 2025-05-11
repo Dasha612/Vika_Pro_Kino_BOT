@@ -98,6 +98,11 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
     next_index = QUESTION_KEYS.index(question_key) + 1
     data = await state.get_data()
     logger.info(f"Данные анкеты: {data}")
+    selected_options = data.get(f"{question_key}_selected", [])
+
+    if not selected_options:
+        await callback.answer("Выберите хотя бы один вариант!", show_alert=True)
+        return
     
     message_id = data.get("anketa_message_id")
     logger.info(f"ID сообщения с анкетой: {message_id}")

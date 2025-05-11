@@ -2,8 +2,13 @@ from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from kbds.pagination import create_movie_carousel_keyboard
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+def is_valid_image_url(url: str) -> bool:
+    return bool(url) and re.match(r'^https?:\/\/.*\.(jpg|jpeg|png|gif|webp)$', url, re.IGNORECASE)
+
 
 async def send_movie_card(message: types.Message, movie, index: int, edit: bool = False, custom_keyboard=None) -> types.Message:
     """Функция для отправки или редактирования карточки фильма"""
@@ -11,7 +16,7 @@ async def send_movie_card(message: types.Message, movie, index: int, edit: bool 
     if isinstance(movie, dict):
         title = movie.get('title')
         google_search_url = f"https://www.google.com/search?q=смотреть+фильм+{title.replace(' ', '+')}"
-        poster_url = movie.get('poster', 'No image available')
+        poster_url = movie.get('poster', "https://i.imgur.com/RwD6GYr.png")
         rating = round(float(movie.get('rating', 0)), 1) if movie.get('rating') != 'Not Found' else 'Not Found'
         year = movie.get('year', 'Неизвестно')
         duration = movie.get('duration', 'Неизвестно')
@@ -43,7 +48,8 @@ async def send_movie_card(message: types.Message, movie, index: int, edit: bool 
                 types.InputMediaPhoto(
                     media=poster_url,
                     caption=movie_text,
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    
                 ),
                 reply_markup=custom_keyboard(index)
             )

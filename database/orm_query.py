@@ -2,9 +2,7 @@ from database.models import Users_anketa, Users, Movies, Users_interaction
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from sqlalchemy import select, delete
-import logging
 
-logger = logging.getLogger(__name__)
 
 
 
@@ -47,7 +45,6 @@ async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
 
     except Exception as e:
         await session.rollback()
-        logger.error(f"Ошибка при добавлении/обновлении анкеты пользователя {user_id}: {e}")
         raise e
 
 
@@ -105,16 +102,15 @@ async def add_movies_by_interaction(user_id: int, movie_id: str, interaction_typ
             session.add(obj)
         
         await session.commit()
-        logger.info(f"Успешно сохранено взаимодействие: user_id={user_id}, movie_id={movie_id}, type={interaction_type}")
+
         
     except Exception as e:
-        logger.error(f"Ошибка при сохранении взаимодействия: {e}")
         await session.rollback()
         raise
 
 #функция для получения фильмов по взаимодействию
 async def get_movies_by_interaction(user_id: int, session: AsyncSession, interaction_types: list = None):
-    logger.debug(f"Получение фильмов для пользователя {user_id}, типы взаимодействия: {interaction_types}")
+    #logger.debug(f"Получение фильмов для пользователя {user_id}, типы взаимодействия: {interaction_types}")
     
     # Начальный запрос
     query = select(Movies).join(Users_interaction).where(Users_interaction.user_id == user_id)
@@ -127,10 +123,9 @@ async def get_movies_by_interaction(user_id: int, session: AsyncSession, interac
         # Выполняем запрос
         result = await session.scalars(query)
         movies = result.all()
-        logger.debug(f"Найдено {len(movies)} фильмов")
+        #logger.debug(f"Найдено {len(movies)} фильмов")
         return movies
     except Exception as e:
-        logger.error(f"Ошибка при получении фильмов: {e}", exc_info=True)
         return []
     
 async def delete_movies_by_interaction(user_id: int, session: AsyncSession, interaction_types: list = None, movie_id: str = None):
@@ -154,15 +149,11 @@ async def delete_movies_by_interaction(user_id: int, session: AsyncSession, inte
 
         # Если записей нет
         if not interactions:
-            logger.info(f"Для пользователя {user_id} не найдено фильмов с указанными параметрами.")
             return
 
         # Логируем количество найденных записей
-        logger.info(f"Найдено {len(interactions)} записей для пользователя {user_id}")
-        if interaction_types:
-            logger.info(f"Типы взаимодействия: {interaction_types}")
-        if movie_id:
-            logger.info(f"ID фильма: {movie_id}")
+   
+
 
         # Для каждого взаимодействия удаляем запись
         for interaction in interactions:
@@ -172,10 +163,9 @@ async def delete_movies_by_interaction(user_id: int, session: AsyncSession, inte
         # Подтверждаем изменения
         await session.commit()
 
-        logger.info(f"Удалены {len(interactions)} фильмов для пользователя {user_id}")
+        #logger.info(f"Удалены {len(interactions)} фильмов для пользователя {user_id}")
 
     except Exception as e:
-        logger.error(f"Ошибка при удалении фильмов для пользователя {user_id}: {e}", exc_info=True)
         await session.rollback()
         raise
 
@@ -256,7 +246,6 @@ async def reset_anketa_in_db(user_id: int, session: AsyncSession):
         return "Анкета успешно сброшена"
     
     except Exception as e:
-        logger.error(f"Ошибка при сбросе анкеты для пользователя {user_id}: {e}")
         await session.rollback()
         return f"Ошибка при сбросе анкеты: {e}"
 
