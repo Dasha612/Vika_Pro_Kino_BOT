@@ -3,15 +3,34 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from kbds.pagination import create_movie_carousel_keyboard
 import logging
 import re
+import aiohttp
+
+async def debug_image_url(url: str):
+    async with aiohttp.ClientSession() as session:
+        async with session.head(url) as resp:
+            print(f"URL: {url}")
+            print(f"Status: {resp.status}")
+            print(f"Content-Type: {resp.content_type}")
 
 logger = logging.getLogger(__name__)
 
-def is_valid_image_url(url: str) -> bool:
-    return bool(url) and re.match(r'^https?:\/\/.*\.(jpg|jpeg|png|gif|webp)$', url, re.IGNORECASE)
+async def is_valid_image_url(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url, timeout=5) as resp:
+                return resp.status == 200 and resp.content_type.startswith("image/")
+    except Exception as e:
+        logging.warning(f"Ошибка проверки постера: {e}")
+        return False
+
 
 
 async def send_movie_card(message: types.Message, movie, index: int, edit: bool = False, custom_keyboard=None) -> types.Message:
     """Функция для отправки или редактирования карточки фильма"""
+    
+    
 
     if isinstance(movie, dict):
         title = movie.get('title')
@@ -23,14 +42,16 @@ async def send_movie_card(message: types.Message, movie, index: int, edit: bool 
         genres = movie.get('genres', 'Неизвестно')
         description = movie.get('description', 'Описание отсутствует')
     else:
+        logger.info(f"Текущий фильм: {movie.movie_name}")
         title = movie.movie_name
         google_search_url = f"https://www.google.com/search?q=смотреть+фильм+{title.replace(' ', '+')}"
-        poster_url = movie.movie_poster if movie.movie_poster else 'No image available'
+        poster_url = movie.movie_poster if movie.movie_poster else "https://i.imgur.com/RwD6GYr.png"
         rating = round(float(movie.movie_rating), 1) if movie.movie_rating != 'Not Found' else 'Not Found'
         year = movie.movie_year
         duration = movie.movie_duration
         genres = movie.movie_genre
         description = movie.movie_description
+    
 
     movie_text = (
         f"<b>Название:</b> {title}\n"

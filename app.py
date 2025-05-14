@@ -25,7 +25,7 @@ dp.include_router(recommendations_router)
 dp.include_router(favourites_router)
 
 async def on_startup(bot: Bot, dispatcher: Dispatcher):
-    run_param = True
+    run_param = False
     if run_param:
         await drop_db()
     await create_db()

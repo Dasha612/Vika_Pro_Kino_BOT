@@ -295,7 +295,12 @@ async def my_profile(callback: CallbackQuery, bot: Bot, session: AsyncSession, s
 
 
 @anketa_router.callback_query(F.data == 'to_the_main_page')
-async def main_page(callback: CallbackQuery):
+async def main_page(callback: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    logger.info(f"Текущее состояние: {current_state}")
+    if current_state is not None:
+        await callback.answer("⏳ Подождите, пока завершится текущий процесс.")
+        return
     await callback.message.edit_text(text='Выберите пункт из меню', reply_markup=get_callback_btns(
             btns={
                 "Мой профиль": "my_profile",

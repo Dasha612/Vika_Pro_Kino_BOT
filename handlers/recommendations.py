@@ -28,11 +28,11 @@ class Recomendations(StatesGroup):
     waiting_for_query = State()
 
 @recommendations_router.callback_query(F.data == 'choose_option')
-async def options(callback: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext ):
+async def options(callback: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext):
+    
+
     await callback.message.edit_text(
-        (
-            f"<b>Выберите опцию</b>"
-        ),
+        "<b>Выберите опцию</b>",
         parse_mode="HTML",
         reply_markup=get_callback_btns(
             btns={
@@ -45,10 +45,17 @@ async def options(callback: CallbackQuery, session: AsyncSession, bot: Bot, stat
 
 
 
+
 @recommendations_router.callback_query(F.data == 'search_movie')
 async def prompt_search_query(callback: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    logger.info(f"Текущее состояние: {current_state}")
+    if current_state is not None:
+        await callback.answer("⏳ Подождите, пока завершится текущий процесс.")
+        return
     await state.set_state(Recomendations.waiting_for_query)
-    await callback.message.edit_text('Введите свой запрос')
+    msg = await callback.message.edit_text('Введите свой запрос')
+    await state.update_data(prompt_message_id=msg.message_id)
 
 
 # 2. Пользователь вводит запрос (например: "Гарри Поттер")
@@ -81,6 +88,32 @@ async def process_search_query(message: types.Message, state: FSMContext, sessio
             logger.warning(f"Не удалось удалить сообщение: {e}")
 
 
+
+        data = await state.get_data()
+        prompt_message_id = data.get("prompt_message_id")
+
+        logger.info(f"редактирую сообщение")
+
+        if prompt_message_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=prompt_message_id,
+                    text="<b>Выберите опцию</b>",
+                    parse_mode="HTML",
+                    reply_markup=get_callback_btns(
+                        btns={
+                            "Запуск рекомендаций": "recommendations",
+                            "Свой запрос": "search_movie",
+                            'Вернуться в меню': 'to_the_main_page'
+                        }
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось отредактировать prompt-сообщение: {e}")
+
+
+
         # Отправляем первый фильм
         message = await send_movie_card(message, movies[0], 0, custom_keyboard=create_movie_carousel_keyboard)
 
@@ -102,6 +135,18 @@ async def process_search_query(message: types.Message, state: FSMContext, sessio
 
 @recommendations_router.callback_query(F.data == 'recommendations')
 async def send_recommendations(callback: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext):
+    current_state = await state.get_state()
+    blocked_states = [
+        Recomendations.waiting_for_action.state,
+        Recomendations.processing.state,
+        Recomendations.waiting_for_rating.state,
+        Recomendations.waiting_for_query.state
+    ]
+
+    if current_state in blocked_states:
+        await callback.answer("⏳ Подождите, пока завершится текущий процесс.")
+        return
+    
     #await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
 
     await bot.send_chat_action(callback.message.chat.id, action="typing")
@@ -218,36 +263,10 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
             movie_id = movie.imdb if hasattr(movie, 'imdb') else movie.get('movie_id')
             await add_movies_by_interaction(user_id, movie_id, 'unwatched', session)
 
-        await state.clear()  # Очищаем состояние, если остановили рекомендации
         await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
-
-        start_message_id = data.get("start_message_id")
-
-        if start_message_id:
-            try:
-                await bot.edit_message_text(
-                    chat_id=callback.message.chat.id,
-                    message_id=start_message_id,
-                    text="Рекомендации остановлены. Возвращайтесь, когда захотите!",
-                    reply_markup=get_callback_btns(btns={
-                        "Мой профиль": "my_profile",
-                        "Избранное": "favourites",
-                        "Рекомендации": "choose_option"
-                    })
-                )
-            except Exception as e:
-                logger.error(f"Не удалось отредактировать стартовое сообщение: {e}")
-                # optionally: отправить новое сообщение, если нужно
-                await bot.send_message(
-                    chat_id=callback.message.chat.id,
-                    text="Рекомендации остановлены. Возвращайтесь, когда захотите!",
-                    reply_markup=get_callback_btns(btns={
-                        "Мой профиль": "my_profile",
-                        "Избранное": "favorites",
-                        "Рекомендации": "choose_option"
-                    })
-                )
-
+        await state.clear()
+    
+            
         await callback.answer()
         return
 
