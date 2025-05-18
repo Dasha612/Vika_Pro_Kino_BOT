@@ -46,7 +46,7 @@ class Users_anketa(Base):
     mood: Mapped[str] = mapped_column(String, nullable=False)
     genres: Mapped[str] = mapped_column(String, nullable=False)
     era: Mapped[str] = mapped_column(String, nullable=False)
-    duration: Mapped[str] = mapped_column(String, nullable=False)
+    country: Mapped[str] = mapped_column(String, nullable=False)
     themes: Mapped[str] = mapped_column(String, nullable=False)
 
     user: Mapped[Users] = relationship(backref="anketa")

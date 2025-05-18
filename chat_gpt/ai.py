@@ -46,7 +46,7 @@ async def get_movie_recommendation_by_preferences(user_id: int, session=AsyncSes
             "rec1": preferences.mood or "Ответ отсутствует",
             "rec2": preferences.genres or "Ответ отсутствует",
             "rec3": preferences.era or "Ответ отсутствует",
-            "rec4": preferences.duration or "Ответ отсутствует",
+            "rec4": preferences.country or "Ответ отсутствует",
             "rec5": preferences.themes or "Ответ отсутствует",
 
         })

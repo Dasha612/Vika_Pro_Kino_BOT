@@ -197,7 +197,7 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
         movies = []
 
         while not movies and retries < max_retries:
-            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session)
+            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session, state=state)
             movies_data = await get_movies(chat_gpt_response, user_id, session)
             movies = await extract_movie_data(movies_data)
 
@@ -313,7 +313,7 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
         await callback.answer("Подождите немного, подгружаем новые рекомендации...")
 
         while True:
-            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session)
+            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session, state=state)
             movies_data = await get_movies(chat_gpt_response, user_id, session)
             new_movies = await extract_movie_data(movies_data)
             if new_movies:
@@ -368,7 +368,7 @@ async def handle_rating(callback: types.CallbackQuery, state: FSMContext, sessio
         await callback.answer("Подождите немного, подгружаем новые рекомендации...")
 
         while True:
-            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session)
+            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session, state=state)
             movies_data = await get_movies(chat_gpt_response, user_id, session)
             new_movies = await extract_movie_data(movies_data)
             

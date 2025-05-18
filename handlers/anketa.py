@@ -13,7 +13,7 @@ import logging
 
 from kbds.inline import get_callback_btns, subscribe_button, get_multi_select_keyboard
 from database.orm_query import check_recommendations_status, reset_anketa_in_db
-from chat_gpt.questions import questions, QUESTION_KEYS, MULTI_OPTIONS, CALLBACK_IDS
+from chat_gpt.questions import questions, QUESTION_KEYS,  CALLBACK_IDS
 
 
 logging.basicConfig(level=logging.INFO)
@@ -110,6 +110,8 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
     # Конец анкеты
     if next_index >= len(QUESTION_KEYS):
         logger.info("Анкета завершена, сохраняем в базу...")
+        await state.clear()
+        await state.update_data(preferences_priority=True)
         try:
             await orm_add_user_rec_set(callback.from_user.id, session, data)
             logger.info("Анкета успешно записана в БД")
@@ -169,9 +171,9 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
                     'Вернуться в меню': 'my_profile'
                 })
             )
-        await state.update_data(preferences_priority=True)
+        
 
-        await state.clear()
+        
         await callback.answer()
         return
 

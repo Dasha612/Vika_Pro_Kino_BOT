@@ -16,8 +16,8 @@ async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
         mood = get_answer("question_1")
         genres = get_answer("question_2")
         era = get_answer("question_3")
-        duration = get_answer("question_4")
-        themes = get_answer("question_5")
+        themes = get_answer("question_4")
+        country = get_answer("question_5")
 
         query = select(Users_anketa).where(Users_anketa.user_id == user_id)
         existing = await session.scalar(query)
@@ -27,7 +27,7 @@ async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
             existing.mood = mood
             existing.genres = genres
             existing.era = era
-            existing.duration = duration
+            existing.country = country
             existing.themes = themes
         else:
             new_obj = Users_anketa(
@@ -36,7 +36,7 @@ async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
                 mood=mood,
                 genres=genres,
                 era=era,
-                duration=duration,
+                country=country,
                 themes=themes,
             )
             session.add(new_obj)

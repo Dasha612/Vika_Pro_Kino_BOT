@@ -107,6 +107,7 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
     movies_data = {}
     movies_to_fetch = {}
 
+    # Проверяем локальную базу
     valid_imdb_ids = [imdb for imdb in movie_imdb_ids.values() if imdb != 'Not Found']
     movies_from_db = await get_movies_from_db_by_imdb_list(valid_imdb_ids, session)
 
@@ -127,13 +128,14 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                         'year': movie_from_db.movie_year,
                         'genres': [{'name': genre} for genre in movie_from_db.movie_genre.split(', ')],
                         'movieLength': movie_from_db.movie_duration,
-                        'type': movie_from_db.movie_type  # если ты хранишь тип в БД
+                        'type': movie_from_db.movie_type
                     }]
                 }
             }
         else:
             movies_to_fetch[movie] = imdb_id
 
+    # Обращаемся к API Кинопоиска
     if movies_to_fetch:
         async with aiohttp.ClientSession(timeout=timeout) as session_http:
             tasks = [
@@ -144,59 +146,53 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                 )
                 for movie, imdb_id in movies_to_fetch.items()
             ]
-            movie_data = await asyncio.gather(*tasks)
+            movie_data_list = await asyncio.gather(*tasks)
 
-            for data, (movie, imdb_id) in zip(movie_data, movies_to_fetch.items()):
-                if (
-                    not data or
-                    'docs' not in data or
-                    not data['docs'] or
-                    not data['docs'][0].get('name') or
-                    not data['docs'][0].get('poster', {}).get('url') or
-                    not data['docs'][0].get('rating', {}).get('kp') or
-                    not (
-                        data['docs'][0].get('shortDescription') or
-                        data['docs'][0].get('description')
-                    )
-                ):
-                    logger.warning(f"Пропущен фильм {movie} — недостаточно данных.")
+            for data, (movie, imdb_id) in zip(movie_data_list, movies_to_fetch.items()):
+                if not data:
+                    logger.warning(f"❌ Нет данных от API для '{movie}' (imdb: {imdb_id})")
                     continue
 
-                movie_info = data['docs'][0]
+                docs = data.get("docs")
+                if not docs or not isinstance(docs, list) or not docs:
+                    logger.warning(f"❌ Пустой или неверный формат 'docs' от API для '{movie}' (imdb: {imdb_id}). Ответ: {data}")
+                    continue
 
-                # 💡 Новый блок: определяем длительность
+                doc = docs[0]
+                if not doc.get('name') or not doc.get('poster', {}).get('url') or not doc.get('rating', {}).get('kp') or not (doc.get('shortDescription') or doc.get('description')):
+                    logger.warning(f"⚠️ Недостаточно данных для '{movie}' (imdb: {imdb_id}):")
+                    logger.warning(f" - name: {doc.get('name')}")
+                    logger.warning(f" - poster: {doc.get('poster', {}).get('url')}")
+                    logger.warning(f" - rating.kp: {doc.get('rating', {}).get('kp')}")
+                    logger.warning(f" - shortDescription: {doc.get('shortDescription')}")
+                    logger.warning(f" - description: {doc.get('description')}")
+                    continue
+
+                movie_info = doc
                 movie_length = movie_info.get('movieLength')
                 series_length = movie_info.get('seriesLength')
-                duration = None
+                duration = f"{movie_length or series_length or 0} min"
+                movie_type = movie_info.get('type') or "movie"
 
-                if movie_length:
-                    duration = f"{movie_length} min"
-                elif series_length:
-                    duration = f"{series_length} min"
-                else:
-                    duration = "0 min"
-
-                # 💡 Новый блок: определяем тип (фильм или сериал)
-                movie_type = movie_info.get('type') or "movie"  # 'movie', 'tv-series', 'animated-series' и т.д.
-
+                # Сохраняем в результирующий словарь
                 movies_data[movie] = {'imdb_id': imdb_id, 'data': data}
 
+                # Сохраняем в базу данных
                 try:
                     await add_movie(
                         movie_id=imdb_id,
                         movie_name=movie_info.get('name', ''),
-                        movie_description=movie_info.get('shortDescription', '') or movie_info.get('description', ''),
+                        movie_description=movie_info.get('shortDescription') or movie_info.get('description', ''),
                         movie_rating=movie_info.get('rating', {}).get('kp', 0.0),
                         movie_poster=movie_info.get('poster', {}).get('url', ''),
                         movie_year=movie_info.get('year', 0),
                         movie_genre=', '.join([genre['name'] for genre in movie_info.get('genres', [])]),
-                        movie_duration=duration,  # передаём уже строку с мин.
-                        movie_type=movie_type,    # 👈 передаём тип контента
+                        movie_duration=duration,
+                        movie_type=movie_type,
                         session=session
                     )
-              
                 except Exception as e:
-                    logger.error(f"Ошибка при добавлении фильма {movie} в базу данных: {e}")
+                    logger.error(f"❌ Ошибка при добавлении фильма '{movie}' в БД: {e}")
                     await session.rollback()
 
     return movies_data

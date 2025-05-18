@@ -41,7 +41,7 @@ coverage.xml
 
 # SQLite and other local DBs
 *.sqlite3
-*.db
+#*.db
 
 # Logs
 *.log
