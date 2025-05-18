@@ -169,6 +169,7 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
                     'Вернуться в меню': 'my_profile'
                 })
             )
+        await state.update_data(preferences_priority=True)
 
         await state.clear()
         await callback.answer()
@@ -256,7 +257,7 @@ async def check_sub(callback: CallbackQuery, bot: Bot, state: FSMContext):
     if is_subscribed.status not in ['left', 'kicked', 'banned']:
         #await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
         await callback.message.edit_text(
-            text="Спасибо за подписку!"
+            text="Спасибо за подписку!\n Для старта нажмите /start"
         )
         await asyncio.sleep(2)
         #await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)

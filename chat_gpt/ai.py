@@ -1,6 +1,7 @@
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram.fsm.context import FSMContext
 
 
 import os
@@ -65,7 +66,7 @@ async def get_movie_recommendation_by_preferences(user_id: int, session=AsyncSes
                 "content": (
                     "You are a recommendation system for selecting movies based on the user's preferences. "
                     "Your task is to recommend movies for the user based on their preferences. "
-                    "Output 10 movies that match the user's preferences. Below are the user's answers to the preference questions in Russian, "
+                    "Output 20 movies that match the user's preferences. Below are the user's answers to the preference questions in Russian, "
                     "however, all movie titles you recommend should strictly be in English. The output data should be in the format of a Python list Movies = [], "
                     "containing only the movie titles in English."
                 )
@@ -86,7 +87,14 @@ async def get_movie_recommendation_by_preferences(user_id: int, session=AsyncSes
 
 
 
-async def get_movie_recommendation_by_interaction(user_id: int, session: AsyncSession):
+async def get_movie_recommendation_by_interaction(user_id: int, session: AsyncSession, state: FSMContext = None):
+    if state:
+        data = await state.get_data()
+        if data.get("preferences_priority"):
+            logger.info("Приоритет отдан анкете, получаем рекомендации по ней")
+            await state.update_data(preferences_priority=False)  # сбрасываем флаг, чтобы в следующий раз смотрели на лайки
+            return await get_movie_recommendation_by_preferences(user_id=user_id, session=session)
+        
     liked_movies = await get_movies_by_interaction(user_id, session, ['liked'])
 
 
@@ -119,7 +127,7 @@ async def get_movie_recommendation_by_interaction(user_id: int, session: AsyncSe
                     "role": "system",
                     "content": (
                         "You are a movie recommendation system. Based on the list of movies that the user liked or recently watched, "
-                        "recommend 10 new movies that match the user's preferences in genre, tone, and style.\n\n"
+                        "recommend 20 new movies that match the user's preferences in genre, tone, and style.\n\n"
                         "Do not recommend movies that the user has already watched or liked — only suggest new and different ones.\n\n"
                         "All recommended movie titles must be written strictly in English. "
                         "Return the recommendations in the format of a Python list: Movies = [ ], containing only the movie titles as strings and nothing else."
@@ -159,7 +167,7 @@ async def get_movie_recommendation_by_search(user_id: int, text: str, session: A
                 "role": "system",
                 "content": (
                     "You are a movie recommendation system. Based on user request, "
-                    "recommend 10 movies/series (Depending on what the user requests).\n\n"
+                    "recommend 5 movies/series (Depending on what the user requests).\n\n"
                     "All recommended movie titles must be written strictly in English. "
                     "Return the recommendations in the format of a Python list: Movies = [ ], containing only the movie titles as strings and nothing else."
                 )   

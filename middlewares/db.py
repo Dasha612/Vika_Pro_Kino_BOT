@@ -51,7 +51,7 @@ class CheckUserSubscription(BaseMiddleware):
 
             if member.status in ['left', 'kicked', 'banned']:
                 await reply_method(
-                    'Для использования бота необходимо подписаться на канал Вика про кино',
+                    'Для использования бота необходимо подписаться на канал "Вика про кино"',
                     reply_markup=subscribe_button
                 )
                 return  # Прерываем выполнение хэндлера

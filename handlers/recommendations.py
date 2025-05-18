@@ -27,6 +27,7 @@ class Recomendations(StatesGroup):
     waiting_for_rating = State()
     waiting_for_query = State()
 
+
 @recommendations_router.callback_query(F.data == 'choose_option')
 async def options(callback: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext):
     
@@ -54,7 +55,7 @@ async def prompt_search_query(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Подождите, пока завершится текущий процесс.")
         return
     await state.set_state(Recomendations.waiting_for_query)
-    msg = await callback.message.edit_text('Введите свой запрос')
+    msg = await callback.message.edit_text('Введите свой запрос и я покажу несколько фильмов/сериалов, соответсвующих вашим предпочтениям :D')
     await state.update_data(prompt_message_id=msg.message_id)
 
 
@@ -123,7 +124,8 @@ async def process_search_query(message: types.Message, state: FSMContext, sessio
             movies=movies,
             current_index=0,
             message_id=message.message_id,
-            chat_id=message.chat.id
+            chat_id=message.chat.id,
+            custom_query=True
         )
 
 
@@ -135,6 +137,10 @@ async def process_search_query(message: types.Message, state: FSMContext, sessio
 
 @recommendations_router.callback_query(F.data == 'recommendations')
 async def send_recommendations(callback: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception as e:
+        logging.warning(f"Не удалось ответить на callback: {e}")
     current_state = await state.get_state()
     blocked_states = [
         Recomendations.waiting_for_action.state,
@@ -223,6 +229,8 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
 @recommendations_router.callback_query(Menu_Callback.filter())
 async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callback, state: FSMContext, session: AsyncSession, bot: Bot):
     data = await state.get_data()
+    is_custom_query = data.get("custom_query", False)
+
     movies = data.get("movies", [])
     current_index = data.get("current_index", 0)
     action = callback_data.menu_name
@@ -298,6 +306,10 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
         await callback.answer()
 
     else:
+        if is_custom_query:
+            await callback.message.delete()
+            await state.clear()
+            return
         await callback.answer("Подождите немного, подгружаем новые рекомендации...")
 
         while True:
@@ -326,6 +338,7 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
 async def handle_rating(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession,  bot: Bot):
     user_rating = int(callback.data)  
     data = await state.get_data()
+    is_custom_query = data.get("custom_query", False)
     current_index = data.get("current_index", 0)
     movies = data.get("movies", [])
     movie = movies[current_index]
@@ -348,6 +361,10 @@ async def handle_rating(callback: types.CallbackQuery, state: FSMContext, sessio
         await callback.answer()
 
     else:
+        if is_custom_query:
+            await callback.message.delete()
+            await state.clear()
+            return
         await callback.answer("Подождите немного, подгружаем новые рекомендации...")
 
         while True:
