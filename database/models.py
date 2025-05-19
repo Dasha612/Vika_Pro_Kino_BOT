@@ -30,6 +30,7 @@ class Movies(Base):
     movie_genre: Mapped[str] = mapped_column(String, nullable=False)
     movie_duration: Mapped[str] = mapped_column(String, nullable=False)
     movie_type: Mapped[str] = mapped_column(String, nullable=True)
+    movie_omdb_poster: Mapped[str] = mapped_column(String, nullable=False)
 
 
 

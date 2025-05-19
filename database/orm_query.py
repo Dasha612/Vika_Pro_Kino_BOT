@@ -2,7 +2,11 @@ from database.models import Users_anketa, Users, Movies, Users_interaction
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from sqlalchemy import select, delete
-
+import aiohttp
+from sqlalchemy import update
+import os
+API_KEY_OMDB = os.getenv('OMDB_API_KEY')
+timeout = aiohttp.ClientTimeout(total=5)
 
 
 
@@ -188,7 +192,8 @@ async def add_movie(
     movie_genre: str,
     movie_duration: str,  # строка, а не int
     movie_type: str,      # 👈 добавлено
-    session: AsyncSession
+    session: AsyncSession,
+    movie_omdb_poster: str = ""
 ):
     obj = Movies(
         imdb=movie_id,
@@ -199,11 +204,26 @@ async def add_movie(
         movie_rating=movie_rating,
         movie_genre=movie_genre,
         movie_duration=movie_duration,
-        movie_type=movie_type     # 👈 передаём в БД
+        movie_type=movie_type,
+        movie_omdb_poster=movie_omdb_poster or ""     # 👈 передаём в БД
     )
     session.add(obj)
     await session.commit()
 
+# database/orm_query.py
+async def add_omdb_poster_to_db(imdb_id: str, session: AsyncSession) -> str:
+    url = f"http://www.omdbapi.com/?i={imdb_id}&apikey={API_KEY_OMDB}"
+    async with aiohttp.ClientSession() as http:
+        async with http.get(url) as response:
+            data = await response.json()
+            poster = data.get("Poster", "")
+            if poster and poster != "N/A":
+                await session.execute(
+                    update(Movies).where(Movies.imdb == imdb_id).values(movie_omdb_poster=poster)
+                )
+                await session.commit()
+                return poster
+    return ""
 
 
 
@@ -237,7 +257,7 @@ async def reset_anketa_in_db(user_id: int, session: AsyncSession):
         anketa.mood = ""
         anketa.genres = ""
         anketa.era = ""
-        anketa.duration = ""
+        anketa.country = ""
         anketa.themes = ""
     
         

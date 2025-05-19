@@ -66,7 +66,7 @@ async def get_movie_recommendation_by_preferences(user_id: int, session=AsyncSes
                 "content": (
                     "You are a recommendation system for selecting movies based on the user's preferences. "
                     "Your task is to recommend movies for the user based on their preferences. "
-                    "Output 20 movies that match the user's preferences. Below are the user's answers to the preference questions in Russian, "
+                    "Output 10 movies that match the user's preferences. Below are the user's answers to the preference questions in Russian, "
                     "however, all movie titles you recommend should strictly be in English. The output data should be in the format of a Python list Movies = [], "
                     "containing only the movie titles in English."
                 )

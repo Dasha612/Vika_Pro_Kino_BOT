@@ -5,7 +5,9 @@ from dotenv import load_dotenv
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.orm_query import add_movie, get_movies_by_interaction, get_movie_from_db,  get_movies_from_db_by_imdb_list
+from sqlalchemy import select, update
+from database.models import Movies
+from database.orm_query import add_movie, get_movies_by_interaction, get_movie_from_db,  get_movies_from_db_by_imdb_list, add_omdb_poster_to_db
 
 
 load_dotenv()
@@ -21,6 +23,8 @@ API_KEY_KINOPOISK = os.getenv('KINOPOISK_API_KEY')
 imdb_cache = {}
 
 sem = asyncio.Semaphore(5)  
+
+
 
 async def safe_get_imdb_id(title: str) -> str | None:
     if title in imdb_cache:
@@ -117,8 +121,11 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
 
         movie_from_db = movies_from_db.get(imdb_id)
         if movie_from_db:
+            omdb_poster = movie_from_db.movie_omdb_poster
+
             movies_data[movie] = {
                 'imdb_id': imdb_id,
+                'omdb_poster': omdb_poster,
                 'data': {
                     'docs': [{
                         'name': movie_from_db.movie_name,
@@ -189,8 +196,17 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                         movie_genre=', '.join([genre['name'] for genre in movie_info.get('genres', [])]),
                         movie_duration=duration,
                         movie_type=movie_type,
-                        session=session
+                        session=session,
+                        movie_omdb_poster=""
                     )
+                    omdb_poster = await add_omdb_poster_to_db(imdb_id, session)
+                    movies_data[movie] = {
+                        'imdb_id': imdb_id,
+                        'omdb_poster': omdb_poster,  # 👈 добавили!
+                        'data': data
+                    }
+
+
                 except Exception as e:
                     logger.error(f"❌ Ошибка при добавлении фильма '{movie}' в БД: {e}")
                     await session.rollback()
@@ -205,7 +221,8 @@ async def get_movies(movies_list, user_id, session: AsyncSession):
 
 
 async def extract_movie_data(movies_data):
-    movie_info_list = []  # Список для хранения данных о фильмах
+    movie_info_list = [] 
+
 
     for movie, data in movies_data.items():
         docs = data['data'].get('docs', []) if data['data'] != 'Not Found' else []
@@ -242,6 +259,7 @@ async def extract_movie_data(movies_data):
                 'title': title_russian,
                 'year': year,
                 'poster': poster_url,
+                'omdb_poster': data.get('omdb_poster', ''),
                 'description': description,
                 'rating': rating,
                 'genres': genres,
@@ -260,6 +278,7 @@ async def extract_movie_data(movies_data):
                 'genres': 'Not Found',
                 'duration': 'Not Found',
             })
+
 
     return movie_info_list
 
