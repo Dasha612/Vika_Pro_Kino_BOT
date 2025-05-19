@@ -281,5 +281,3 @@ async def extract_movie_data(movies_data):
 
 
     return movie_info_list
-
-
