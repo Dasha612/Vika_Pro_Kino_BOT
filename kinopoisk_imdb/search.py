@@ -202,7 +202,7 @@ async def find_in_kinopoisk_by_imdb(movie_imdb_ids, session: AsyncSession):
                     omdb_poster = await add_omdb_poster_to_db(imdb_id, session)
                     movies_data[movie] = {
                         'imdb_id': imdb_id,
-                        'omdb_poster': omdb_poster,  # 👈 добавили!
+                        'omdb_poster': omdb_poster, 
                         'data': data
                     }
 
@@ -240,7 +240,7 @@ async def extract_movie_data(movies_data):
             rating = movie_info.get('rating', {}).get('kp', 'No rating available')
             genres = ', '.join([genre.get('name', 'Unknown') for genre in movie_info.get('genres', [])])
 
-            # 💡 Определяем длительность
+        
             movie_length = movie_info.get('movieLength')
             series_length = movie_info.get('seriesLength')
             if movie_length:
@@ -250,7 +250,7 @@ async def extract_movie_data(movies_data):
             else:
                 duration = 'N/A'
 
-            # 💡 Определяем тип (movie, tv-series и т.д.)
+      
             movie_type = movie_info.get('type', 'unknown')
 
             movie_info_list.append({

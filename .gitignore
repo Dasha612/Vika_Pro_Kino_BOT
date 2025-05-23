@@ -40,8 +40,8 @@ coverage.xml
 .idea/
 
 # SQLite and other local DBs
-#*.sqlite3
-#*.db
+*.sqlite3
+*.db
 
 # Logs
 *.log
