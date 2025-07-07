@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped, DeclarativeBase, mapped_column, relationship
-from sqlalchemy import BigInteger, DATETIME, Text, String, Float, Integer, ForeignKey, Boolean, DateTime, Index
+from sqlalchemy import BigInteger, TIMESTAMP, Text, String, Float, Integer, ForeignKey, Boolean, DateTime, Index
 from sqlalchemy.ext.asyncio import AsyncAttrs
 
 
@@ -13,8 +13,8 @@ class Users(Base):
     __tablename__ = "users"
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    user_start_date: Mapped[DateTime] = mapped_column(DATETIME, nullable=False)
-    user_end_date: Mapped[DateTime] = mapped_column(DATETIME, nullable=False)
+    user_start_date: Mapped[DateTime] = mapped_column(TIMESTAMP, nullable=False)
+    user_end_date: Mapped[DateTime] = mapped_column(TIMESTAMP, nullable=False)
 
 # ─────────────────────────────────────
 
