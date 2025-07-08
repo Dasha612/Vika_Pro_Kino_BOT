@@ -255,7 +255,7 @@ async def start_cmd(message: types.Message, session: AsyncSession, state: FSMCon
 
 @anketa_router.callback_query(F.data == 'check_subscription')
 async def check_sub(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    is_subscribed = await bot.get_chat_member(chat_id='-100' + os.getenv("TEST_CHAT_ID"), user_id=callback.from_user.id)
+    is_subscribed = await bot.get_chat_member(chat_id='-100' + os.getenv("CHAT_ID"), user_id=callback.from_user.id)
     if is_subscribed.status not in ['left', 'kicked', 'banned']:
         #await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
         await callback.message.edit_text(
