@@ -43,7 +43,7 @@ def get_inlineMix_btns(
 
 
 subscribe_button  = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text='Подписаться на канал', url=f"https://t.me/{os.getenv('TEST_CHANNEL_ID')}")],
+    [InlineKeyboardButton(text='Подписаться на канал', url=f"https://t.me/{os.getenv('CHANNEL_ID')}")],
     [InlineKeyboardButton(text='Проверить подписку', callback_data='check_subscription')]
 ])
 

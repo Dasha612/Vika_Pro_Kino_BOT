@@ -46,7 +46,7 @@ class CheckUserSubscription(BaseMiddleware):
             return await handler(event, data)
 
         try:
-            chat_id = '-100' + os.getenv("TEST_CHAT_ID")
+            chat_id = '-100' + os.getenv("CHAT_ID")
             member = await self.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
 
             if member.status in ['left', 'kicked', 'banned']:
