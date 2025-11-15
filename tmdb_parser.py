@@ -4,42 +4,47 @@ import asyncio
 import requests, gzip, json
 import tmdbsimple as tmdb
 
-
+from datetime import date
 
 BASE_URL = "https://api.themoviedb.org/3"
 
 
-def tmdb_search_movie(movie_id, language="en-EN"):
-    """
-    Получает информацию об одном фильме по ID
-    """
-    tmdb.API_KEY = '756fb2b27178a4e70deec129636a1843'
-    tmdb.REQUESTS_TIMEOUT = 5 
-    
-    try:
-        movie = tmdb.Movies(movie_id)
-        movie_info = movie.info(language=language)  
-        keywords_info = movie.keywords()
-        keywords = [keyword['name'] for keyword in keywords_info.get('keywords', [])]   
-        return {
-            'id': movie_info.get('id'),
-            'title': movie_info.get('title'),
-            'original_title': movie_info.get('original_title'),
-            'release_date': movie_info.get('release_date', ''),
-            'overview': movie_info.get('overview', ''),
-            'poster_path': f"https://image.tmdb.org/t/p/w500{movie_info.get('poster_path')}" if movie_info.get('poster_path') else None,
-            'vote_average': movie_info.get('vote_average', 0),
-            'genres': [genre['name'] for genre in movie_info.get('genres', [])],
-            'runtime': movie_info.get('runtime', 0),
-            'status': movie_info.get('status', ''),
-            'keywords':  keywords
-        }
-        
-    except Exception as e:
-        print(f"Ошибка при получении фильма ID {movie_id}: {e}")
-        return None
+def tmdb_search_movie(movie_id: int, language: str = "en-US") -> dict | None:
+    """СИНХРОННАЯ функция: один HTTP-запрос к tmdbsimple (info + keywords)."""
+    m = tmdb.Movies(movie_id)
+    info = m.info(language=language, append_to_response="keywords")
 
-def get_movies_by_ids(movie_ids, language="en-EN"):
+    poster_path = info.get("poster_path") or None
+    rel = (info.get("release_date") or "").strip()
+    try:
+        rel_date = date.fromisoformat(rel) if rel else None
+    except ValueError:
+        rel_date = None
+
+    kw_block = (info.get("keywords") or {})
+    kw_list = kw_block.get("keywords") or kw_block.get("results") or []
+    keywords = [k.get("name") for k in kw_list if k.get("name")]
+
+    return {
+        "id": info.get("id"),
+        "title": info.get("title") or "",
+        "original_title": info.get("original_title") or "",
+        "release_date": rel_date,  # datetime.date | None
+        "overview": info.get("overview") or "",
+        "poster_path": f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else None,
+        "vote_average": float(info.get("vote_average") or 0.0),
+        "genres": [g.get("name") for g in (info.get("genres") or []) if g.get("name")],
+        "runtime": info.get("runtime") if isinstance(info.get("runtime"), int) else None,
+        "status": info.get("status") or "",
+        "keywords": keywords,
+    }
+
+async def fetch_movie_safe(movie_id: int, language: str) -> dict | None:
+    """Не блокируем event loop: выносим sync TMDB-вызов в поток."""
+    return await asyncio.to_thread(tmdb_search_movie, movie_id, language)
+
+
+async def get_movies_by_ids(movie_ids, language="en-EN"):
     """
     Получает информацию о нескольких фильмах по списку ID
     """
@@ -54,21 +59,8 @@ def get_movies_by_ids(movie_ids, language="en-EN"):
     return movies_info
 
 
-if __name__ == "__main__":
 
-    with open('movie_ids.txt', 'r') as f:
-        all_movie_ids = [line.strip() for line in f if line.strip()]
-    
- 
-    test_ids = all_movie_ids[:5]
-    print(f"Получаем информацию для {len(test_ids)} фильмов...")
-    
-    movies = get_movies_by_ids(test_ids, language="ru-RU")
-    print(movies)
-    
-
-
-def _refresh_tbdb_id_list():
+async def _refresh_tbdb_id_list():
     url = "http://files.tmdb.org/p/exports/movie_ids_09_30_2025.json.gz"
     out_file = "movie_ids.txt"
 
@@ -88,4 +80,20 @@ def _refresh_tbdb_id_list():
     print("Список ID фильмов сохранён в", out_file)
 
 
+
+
+
+if __name__ == "__main__":
+    #_refresh_tbdb_id_list()
+
+    with open('movie_ids.txt', 'r') as f:
+        all_movie_ids = [line.strip() for line in f if line.strip()]
+    
+ 
+    test_ids = all_movie_ids[:5]
+    print(f"Получаем информацию для {len(test_ids)} фильмов...")
+    
+    movies = get_movies_by_ids(test_ids, language="ru-RU")
+    print(movies)
+    
 

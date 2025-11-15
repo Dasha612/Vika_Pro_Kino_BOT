@@ -5,10 +5,15 @@ from sqlalchemy import select, delete
 import aiohttp
 from sqlalchemy import update
 import os
+from typing import Sequence
+import asyncio
+
+
+from tmdb_parser import tmdb_search_movie, fetch_movie_safe
 API_KEY_OMDB = os.getenv('OMDB_API_KEY')
 timeout = aiohttp.ClientTimeout(total=5)
 
-
+language = "ru-RU"
 
 #функция для добавления ответов пользователя в базу
 async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
@@ -89,7 +94,7 @@ async def add_movies_by_interaction(user_id: int, movie_id: str, interaction_typ
         # Проверяем существование записи
         query = select(Users_interaction).where(
             Users_interaction.user_id == user_id,
-            Users_interaction.movie_id == movie_id
+            Users_interaction.tmdb_id == movie_id
         )
         existing = await session.scalar(query)
         
@@ -100,7 +105,7 @@ async def add_movies_by_interaction(user_id: int, movie_id: str, interaction_typ
             # Если записи нет, создаем новую
             obj = Users_interaction(
                 user_id=user_id,
-                movie_id=movie_id,
+                tmdb_id=movie_id,
                 interaction_type=interaction_type
             )
             session.add(obj)
@@ -145,7 +150,7 @@ async def delete_movies_by_interaction(user_id: int, session: AsyncSession, inte
             
         # Если передан ID фильма, фильтруем по нему
         if movie_id:
-            query = query.where(Users_interaction.movie_id == movie_id)
+            query = query.where(Users_interaction.tmdb_id == movie_id)
 
         # Выполняем запрос для получения всех записей
         result = await session.execute(query)
@@ -181,68 +186,86 @@ async def get_user_preferences(user_id: int, session: AsyncSession):
     return preferences
 
 
-
-async def add_movie(
-    movie_id: str,
-    movie_name: str,
-    movie_description: str,
-    movie_rating: float,
-    movie_poster: str,
-    movie_year: int,
-    movie_genre: str,
-    movie_duration: str,  # строка, а не int
-    movie_type: str,      # 👈 добавлено
+async def add_movies(
     session: AsyncSession,
-    movie_omdb_poster: str = ""
+    language: str = "ru-RU",
+    source_path: str = "movie_ids.txt",
+    limit: int = 20,
 ):
-    obj = Movies(
-        imdb=movie_id,
-        movie_name=movie_name,
-        movie_description=movie_description,
-        movie_year=movie_year,
-        movie_poster=movie_poster,
-        movie_rating=movie_rating,
-        movie_genre=movie_genre,
-        movie_duration=movie_duration,
-        movie_type=movie_type,
-        movie_omdb_poster=movie_omdb_poster or ""     # 👈 передаём в БД
+    # читаем id и приводим к int
+    with open(source_path, "r", encoding="utf-8") as f:
+        all_ids: list[int] = [int(line.strip()) for line in f if line.strip().isdigit()]
+    movie_ids = all_ids[:limit]
+
+    # Чтобы не падать на дубликатах — предварительно узнаём, что уже есть
+    existing = await session.execute(
+        select(Movies.tmdb_id).where(Movies.tmdb_id.in_(movie_ids))
     )
-    session.add(obj)
-    await session.commit()
+    existing_ids = set(existing.scalars().all())
+    new_ids = [mid for mid in movie_ids if mid not in existing_ids]
 
-# database/orm_query.py
-async def add_omdb_poster_to_db(imdb_id: str, session: AsyncSession) -> str:
-    url = f"http://www.omdbapi.com/?i={imdb_id}&apikey={API_KEY_OMDB}"
-    async with aiohttp.ClientSession() as http:
-        async with http.get(url) as response:
-            data = await response.json()
-            poster = data.get("Poster", "")
-            if poster and poster != "N/A":
-                await session.execute(
-                    update(Movies).where(Movies.imdb == imdb_id).values(movie_omdb_poster=poster)
-                )
-                await session.commit()
-                return poster
-    return ""
+    if not new_ids:
+        return
 
+    # Параллельный сбор данных с ограничением одновременных запросов
+    sem = asyncio.Semaphore(8)  # подружите с лимитами TMDB
+    async def bounded(mid: int):
+        async with sem:
+            return await fetch_movie_safe(mid, language)
+
+    infos: Sequence[dict | None] = await asyncio.gather(*(bounded(mid) for mid in new_ids))
+
+    objects: list[Movies] = []
+    for info in infos:
+        if not info:
+            continue
+        objects.append(
+            Movies(
+                tmdb_id=info["id"],
+                title=info["title"],
+                original_title=info["original_title"],
+                description=info["overview"],
+                vote_average=info["vote_average"],
+                # если хотите — заполняйте оба поля одним значением
+                poster=info["poster_path"],
+                tmdb_poster_path=info["poster_path"],
+                release_date=info["release_date"],   # Date | None
+                genres=info["genres"],               # list[str] -> JSON
+                runtime=info["runtime"],             # int | None
+                keywords=info["keywords"],           # list[str] -> JSON
+            )
+        )
+
+    if not objects:
+        return
+
+    session.add_all(objects)
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
 
 
 #функция для проверки существования фильма в базе
 async def get_movie_from_db(imdb: str, session: AsyncSession):
-    query = select(Movies).where(Movies.imdb == imdb)
+    query = select(Movies).where(Movies.tmdb_id == imdb)
     movie = await session.scalar(query)
     return movie
 
+
+#Получает фильмы из базы данных по списку IMDb ID и возвращает словарь {imdb: movie}
 async def get_movies_from_db_by_imdb_list(imdb_ids: list[str], session: AsyncSession) -> dict:
-    """Получает фильмы из базы данных по списку IMDb ID и возвращает словарь {imdb: movie}"""
     if not imdb_ids:
         return {}
 
-    stmt = select(Movies).where(Movies.imdb.in_(imdb_ids))
+    stmt = select(Movies).where(Movies.tmdb_id.in_(imdb_ids))
     result = await session.scalars(stmt)
-    return {movie.imdb: movie for movie in result}
+    return {movie.tmdb_id: movie for movie in result}
 
 
+
+#сброс анкеты пользователя
 async def reset_anketa_in_db(user_id: int, session: AsyncSession):
     try:
         # Ищем анкету пользователя в базе
@@ -271,3 +294,4 @@ async def reset_anketa_in_db(user_id: int, session: AsyncSession):
 
 
                                 
+
