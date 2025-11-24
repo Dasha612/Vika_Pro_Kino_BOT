@@ -146,6 +146,7 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
                     reply_markup=get_callback_btns(btns={
                     "Запуск рекомендаций": "recommendations",
                     "Свой запрос": "search_movie", 
+                    "Найти фильм вместе" : "find_together",
                     'Вернуться в меню': 'my_profile'
                 })
                 )
@@ -154,6 +155,7 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
                 await callback.message.answer("Выбери, что ты хочешь сделать", reply_markup=get_callback_btns(btns={
                     "Запуск рекомендаций": "recommendations",
                     "Свой запрос": "search_movie", 
+                    "Найти фильм вместе" : "find_together",
                     'Вернуться в меню': 'my_profile'
                 }))
         else:
@@ -168,6 +170,7 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
                 reply_markup=get_callback_btns(btns={
                     "Запуск рекомендаций": "recommendations",
                     "Свой запрос": "search_movie", 
+                    "Найти фильм вместе" : "find_together",
                     'Вернуться в меню': 'my_profile'
                 })
             )

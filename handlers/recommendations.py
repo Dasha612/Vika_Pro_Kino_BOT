@@ -39,6 +39,7 @@ async def options(callback: CallbackQuery, session: AsyncSession, bot: Bot, stat
             btns={
                 "Запуск рекомендаций": "recommendations",
                 "Свой запрос": "search_movie",
+                "Найти фильм вместе" : "find_together",
                 'Вернуться в меню': 'to_the_main_page'
             }
         )
@@ -59,7 +60,6 @@ async def prompt_search_query(callback: CallbackQuery, state: FSMContext):
     await state.update_data(prompt_message_id=msg.message_id)
 
 
-# 2. Пользователь вводит запрос (например: "Гарри Поттер")
 @recommendations_router.message(Recomendations.waiting_for_query, F.text)
 async def process_search_query(message: types.Message, state: FSMContext, session: AsyncSession, bot: Bot):
     user_text = message.text
@@ -70,65 +70,12 @@ async def process_search_query(message: types.Message, state: FSMContext, sessio
     if (user_text):
         await bot.send_chat_action(message.chat.id, action="typing")
         await asyncio.sleep(1)
-
-        chat_gpt_response = await get_movie_recommendation_by_search(user_id, user_text, session)
-
-        if chat_gpt_response:
-            movies_data = await get_movies(chat_gpt_response, user_id, session)
-            movies = await extract_movie_data(movies_data)
-
-            retries += 1
-        if retries >= max_retries: 
-            await message.answer('Кажется, произошла ошибка или прогер хочет денег :(\nПопробуйте нажать кнопку "Стоп" и возобновить рекомендации или обратитесь в поддержку - @Ddasmii')
-            await message.answer()
-            return
-        await asyncio.sleep(3)
-        try:
-            await bot.delete_message(message.chat.id, user_message_id)
-        except Exception as e:
-            logger.warning(f"Не удалось удалить сообщение: {e}")
+        # Тут должна быть обработка сообщения пользователя по контексту. 
+        # Просим чатгпт разобрать текст юзера на ключевые слова и сделать запрос в бд
+        # 
 
 
-
-        data = await state.get_data()
-        prompt_message_id = data.get("prompt_message_id")
-
-        logger.info(f"редактирую сообщение")
-
-        if prompt_message_id:
-            try:
-                await bot.edit_message_text(
-                    chat_id=message.chat.id,
-                    message_id=prompt_message_id,
-                    text="<b>Выберите опцию</b>",
-                    parse_mode="HTML",
-                    reply_markup=get_callback_btns(
-                        btns={
-                            "Запуск рекомендаций": "recommendations",
-                            "Свой запрос": "search_movie",
-                            'Вернуться в меню': 'to_the_main_page'
-                        }
-                    )
-                )
-            except Exception as e:
-                logger.warning(f"Не удалось отредактировать prompt-сообщение: {e}")
-
-
-
-        # Отправляем первый фильм
-        message = await send_movie_card(message, movies[0], 0, custom_keyboard=create_movie_carousel_keyboard)
-
-        # Сохраняем список фильмов, текущий индекс и ID сообщения в состояние
-        await state.set_state(Recomendations.waiting_for_action)
-        await state.update_data(
-            movies=movies,
-            current_index=0,
-            message_id=message.message_id,
-            chat_id=message.chat.id,
-            custom_query=True
-        )
-
-
+        
 
 
 
@@ -201,31 +148,7 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
         retries = 0
         movies = []
 
-        while not movies and retries < max_retries:
-            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session, state=state)
-            movies_data = await get_movies(chat_gpt_response, user_id, session)
-            movies = await extract_movie_data(movies_data)
-
-
-            retries += 1
-        if retries >= max_retries: 
-            await callback.message.answer('Кажется, произошла ошибка или прогер хочет денег :(\nПопробуйте нажать кнопку "Стоп" и возобновить рекомендации или обратитесь в поддержку - @Ddasmii')
-            await safe_callback_answer(callback)
-            return
-
-
-        # Отправляем первый фильм
-        message = await send_movie_card(callback.message, movies[0], 0, custom_keyboard=create_movie_carousel_keyboard)
-
-        # Сохраняем список фильмов, текущий индекс и ID сообщения в состояние
-        await state.set_state(Recomendations.waiting_for_action)
-        await state.update_data(
-            movies=movies,
-            current_index=0,
-            message_id=message.message_id,
-            chat_id=message.chat.id
-        )
-        await safe_callback_answer(callback)
+       
 
     
     

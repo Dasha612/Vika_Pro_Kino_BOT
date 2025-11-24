@@ -2,6 +2,7 @@ from sqlalchemy.orm import Mapped, DeclarativeBase, mapped_column, relationship
 from sqlalchemy import BigInteger, TIMESTAMP, Text, String, Float, Date, Integer, ForeignKey, Boolean, DateTime, Index
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.types import JSON
+from sqlalchemy.dialects.postgresql import ARRAY, DOUBLE_PRECISION
 
 # Базовый класс для всех моделей
 class Base(AsyncAttrs, DeclarativeBase):
@@ -22,20 +23,18 @@ class Users(Base):
 class Movies(Base):
     __tablename__ = "movies"
 
-    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)     # был str
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)  
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     original_title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     vote_average: Mapped[float] = mapped_column(Float, nullable=False)
-    poster: Mapped[str | None] = mapped_column(String(512), nullable=True)  # делаем nullable или заполняем всегда
-    release_date: Mapped[Date | None] = mapped_column(Date, nullable=True)   # был Integer
-    genres: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)  # был String
-    runtime: Mapped[int | None] = mapped_column(Integer, nullable=True)      # был String
+    poster: Mapped[str | None] = mapped_column(String(512), nullable=True)  
+    release_date: Mapped[Date | None] = mapped_column(Date, nullable=True) 
+    genres: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list) 
+    runtime: Mapped[int | None] = mapped_column(Integer, nullable=True)      
     tmdb_poster_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     keywords: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-
-
-
+    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(DOUBLE_PRECISION), nullable=True)
 
 
 

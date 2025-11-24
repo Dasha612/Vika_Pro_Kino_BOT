@@ -11,6 +11,7 @@ from handlers.anketa import anketa_router
 from handlers.recommendations import recommendations_router
 from database.engine import create_db, drop_db, session_maker
 from handlers.favourites import favourites_router
+from database.orm_query import update_movies_db
 
 
 
@@ -37,6 +38,7 @@ async def on_shutdown(bot: Bot, dispatcher: Dispatcher):
 async def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
+
 
     dp.update.middleware(DataBaseSesssion(session_pool=session_maker))
     dp.update.middleware(CheckUserSubscription(bot=bot))

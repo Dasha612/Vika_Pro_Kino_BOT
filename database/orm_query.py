@@ -7,9 +7,10 @@ from sqlalchemy import update
 import os
 from typing import Sequence
 import asyncio
+from database.embedding import model, build_movie_text
 
 
-from tmdb_parser import tmdb_search_movie, fetch_movie_safe
+from database.tmdb_parser import tmdb_search_movie, load_all_tmdb_ids, get_popular_ids
 API_KEY_OMDB = os.getenv('OMDB_API_KEY')
 timeout = aiohttp.ClientTimeout(total=5)
 
@@ -186,65 +187,6 @@ async def get_user_preferences(user_id: int, session: AsyncSession):
     return preferences
 
 
-async def add_movies(
-    session: AsyncSession,
-    language: str = "ru-RU",
-    source_path: str = "movie_ids.txt",
-    limit: int = 20,
-):
-    # читаем id и приводим к int
-    with open(source_path, "r", encoding="utf-8") as f:
-        all_ids: list[int] = [int(line.strip()) for line in f if line.strip().isdigit()]
-    movie_ids = all_ids[:limit]
-
-    # Чтобы не падать на дубликатах — предварительно узнаём, что уже есть
-    existing = await session.execute(
-        select(Movies.tmdb_id).where(Movies.tmdb_id.in_(movie_ids))
-    )
-    existing_ids = set(existing.scalars().all())
-    new_ids = [mid for mid in movie_ids if mid not in existing_ids]
-
-    if not new_ids:
-        return
-
-    # Параллельный сбор данных с ограничением одновременных запросов
-    sem = asyncio.Semaphore(8)  # подружите с лимитами TMDB
-    async def bounded(mid: int):
-        async with sem:
-            return await fetch_movie_safe(mid, language)
-
-    infos: Sequence[dict | None] = await asyncio.gather(*(bounded(mid) for mid in new_ids))
-
-    objects: list[Movies] = []
-    for info in infos:
-        if not info:
-            continue
-        objects.append(
-            Movies(
-                tmdb_id=info["id"],
-                title=info["title"],
-                original_title=info["original_title"],
-                description=info["overview"],
-                vote_average=info["vote_average"],
-                # если хотите — заполняйте оба поля одним значением
-                poster=info["poster_path"],
-                tmdb_poster_path=info["poster_path"],
-                release_date=info["release_date"],   # Date | None
-                genres=info["genres"],               # list[str] -> JSON
-                runtime=info["runtime"],             # int | None
-                keywords=info["keywords"],           # list[str] -> JSON
-            )
-        )
-
-    if not objects:
-        return
-
-    session.add_all(objects)
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
 
 
 #функция для проверки существования фильма в базе
@@ -293,5 +235,67 @@ async def reset_anketa_in_db(user_id: int, session: AsyncSession):
         return f"Ошибка при сбросе анкеты: {e}"
 
 
-                                
+async def load_existing_tmdb_ids(session: AsyncSession) -> set[int]:
+    result = await session.execute(select(Movies.tmdb_id))
+    return set(result.scalars().all())
+
+
+
+async def update_movies_db(session: AsyncSession, language="ru-RU", limit=None):
+    # 1. Список всех ID
+    #all_ids = load_all_tmdb_ids("movie_ids.txt")
+    all_ids = get_popular_ids(50)
+
+    # 2. Список уже существующих
+    existing_ids = await load_existing_tmdb_ids(session)
+
+    # 3. Новые ID
+    new_ids = [mid for mid in all_ids if mid not in existing_ids]
+
+    if limit:
+        new_ids = new_ids[:limit]
+
+    print(f"Найдено {len(new_ids)} новых фильмов")
+
+    added = 0
+
+    for tmdb_id in new_ids:
+        info = await asyncio.to_thread(tmdb_search_movie, tmdb_id, language)
+        
+
+        if not info:
+            continue  # фильм отфильтрован (нет описания / короткометражка / нет данных)
+        text_for_embedding = build_movie_text(info)
+        vector = await asyncio.to_thread(
+            model.encode,
+            text_for_embedding,
+            # можно сразу нормализовать
+            # normalize_embeddings=True
+        )
+
+        movie = Movies(
+            tmdb_id=info["id"],
+            title=info["title"],
+            original_title=info["original_title"],
+            description=info["overview"],
+            vote_average=info["vote_average"],
+            poster=info["poster_path"],
+            release_date=info["release_date"],
+            genres=info["genres"],
+            runtime=info["runtime"],
+            tmdb_poster_path=info["poster_path"],
+            keywords=info["keywords"],
+            embedding=vector.tolist(),
+        )
+
+        session.add(movie)
+        added += 1
+
+        # периодически фиксируем (для больших объёмов)
+        if added % 100 == 0:
+            await session.commit()
+            print(f"Сохранено {added} фильмов...")
+
+    await session.commit()
+    print(f"Готово! Добавлено {added} новых фильмов.")
 
