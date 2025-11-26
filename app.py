@@ -25,18 +25,13 @@ dp.include_router(anketa_router)
 dp.include_router(recommendations_router)
 dp.include_router(favourites_router)
 
-async def on_startup(bot: Bot, dispatcher: Dispatcher):
-    run_param = True
-    if run_param:
-        await drop_db()
-    await create_db()
 
 async def on_shutdown(bot: Bot, dispatcher: Dispatcher):
     print('Бот лег...')
 
 
 async def main():
-    dp.startup.register(on_startup)
+
     dp.shutdown.register(on_shutdown)
 
 

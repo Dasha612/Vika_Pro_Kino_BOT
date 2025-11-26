@@ -11,8 +11,8 @@ import asyncio
 
 from database.orm_query import add_movies_by_interaction, get_movies_by_interaction, check_recommendations_status, delete_movies_by_interaction
 from kbds.inline import get_callback_btns, subscribe_button, rate_buttons
-from chat_gpt.ai import get_movie_recommendation_by_interaction, get_movie_recommendation_by_search
-from kinopoisk_imdb.search import get_movies, extract_movie_data
+
+
 from kbds.pagination import create_movie_carousel_keyboard
 from handlers.movie_utils import send_movie_card
 recommendations_router = Router()

@@ -8,7 +8,7 @@ import os
 from typing import Sequence
 import asyncio
 from database.embedding import model, build_movie_text
-
+from sqlalchemy.dialects.postgresql import insert
 
 from database.tmdb_parser import tmdb_search_movie, load_all_tmdb_ids, get_popular_ids
 API_KEY_OMDB = os.getenv('OMDB_API_KEY')
@@ -239,7 +239,13 @@ async def load_existing_tmdb_ids(session: AsyncSession) -> set[int]:
     result = await session.execute(select(Movies.tmdb_id))
     return set(result.scalars().all())
 
-
+async def upsert_movie(session, movie_dict):
+    stmt = insert(Movies).values(**movie_dict)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[Movies.tmdb_id],
+        set_=movie_dict
+    )
+    await session.execute(stmt)
 
 async def update_movies_db(session: AsyncSession, language="ru-RU", limit=None):
     # 1. Список всех ID
@@ -273,22 +279,23 @@ async def update_movies_db(session: AsyncSession, language="ru-RU", limit=None):
             # normalize_embeddings=True
         )
 
-        movie = Movies(
-            tmdb_id=info["id"],
-            title=info["title"],
-            original_title=info["original_title"],
-            description=info["overview"],
-            vote_average=info["vote_average"],
-            poster=info["poster_path"],
-            release_date=info["release_date"],
-            genres=info["genres"],
-            runtime=info["runtime"],
-            tmdb_poster_path=info["poster_path"],
-            keywords=info["keywords"],
-            embedding=vector.tolist(),
-        )
+        movie = {
+            "tmdb_id": info["id"],
+            "title": info["title"],
+            "original_title": info["original_title"],
+            "description": info["overview"],
+            "vote_average": info["vote_average"],
+            "poster": info["poster_path"],
+            "release_date": info["release_date"],
+            "genres": info["genres"],
+            "runtime": info["runtime"],
+            "tmdb_poster_path": info["poster_path"],
+            "keywords": info["keywords"],
+            "embedding": vector.tolist(),
+        }
+        await upsert_movie(session, movie)
 
-        session.add(movie)
+       
         added += 1
 
         # периодически фиксируем (для больших объёмов)
