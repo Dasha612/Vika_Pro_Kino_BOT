@@ -1,13 +1,54 @@
 from sentence_transformers import SentenceTransformer
+import numpy as np
+
+
+
 model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 
 def build_movie_text(info: dict) -> str:
-    parts = [
-        info.get("title") or "",
-        info.get("original_title") or "",
-        info.get("overview") or "",
-        ", ".join(info.get("genres") or []),
-        ", ".join(info.get("keywords") or []),
-    ]
-    return "\n".join(p for p in parts if p.strip())
+    parts = []
+
+    title = info.get("title") or ""
+    orig = info.get("original_title") or ""
+    if title:
+        parts.append(f"Название: {title}")
+    if orig and orig != title:
+        parts.append(f"Оригинальное название: {orig}")
+
+    tagline = (info.get("tagline") or "").strip()
+    if tagline:
+        parts.append(f"Слоган: {tagline}")
+
+    genres = info.get("genres") or []
+    if genres:
+        parts.append("Жанры: " + ", ".join(genres))
+
+    keywords = info.get("keywords") or []
+    if keywords:
+        parts.append("Ключевые слова: " + ", ".join(keywords))
+
+    actors = info.get("actors") or []
+    if actors:
+        parts.append("Актёры: " + ", ".join(actors[:8]))
+
+    directors = info.get("directors") or []
+    if directors:
+        parts.append("Режиссёры: " + ", ".join(directors))
+
+    countries = info.get("production_countries") or []
+    if countries:
+        parts.append("Страны: " + ", ".join(countries))
+
+    overview = (info.get("overview") or "").strip()
+    if overview:
+        parts.append("Описание: " + overview)
+
+    return "\n".join(parts)
+
+def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
+    """Косинусное сходство двух векторов."""
+    a = a.astype("float32")
+    b = b.astype("float32")
+    denom = (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9)
+    return float(np.dot(a, b) / denom)

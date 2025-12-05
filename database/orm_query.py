@@ -267,42 +267,80 @@ async def update_movies_db(session: AsyncSession, language="ru-RU", limit=None):
 
     for tmdb_id in new_ids:
         info = await asyncio.to_thread(tmdb_search_movie, tmdb_id, language)
-        
-
         if not info:
-            continue  # фильм отфильтрован (нет описания / короткометражка / нет данных)
-        text_for_embedding = build_movie_text(info)
-        vector = await asyncio.to_thread(
-            model.encode,
-            text_for_embedding,
-            # можно сразу нормализовать
-            # normalize_embeddings=True
-        )
+            continue
 
-        movie = {
+        text_for_embedding = build_movie_text(info)
+        vector = await asyncio.to_thread(model.encode, text_for_embedding)
+
+        movie_dict = {
             "tmdb_id": info["id"],
             "title": info["title"],
             "original_title": info["original_title"],
             "description": info["overview"],
+
             "vote_average": info["vote_average"],
+            "vote_count": info["vote_count"],
+            "popularity": info["popularity"],
+
             "poster": info["poster_path"],
-            "release_date": info["release_date"],
-            "genres": info["genres"],
-            "runtime": info["runtime"],
             "tmdb_poster_path": info["poster_path"],
+
+            "release_date": info["release_date"],
+            "runtime": info["runtime"],
+
+            "genres": info["genres"],
             "keywords": info["keywords"],
+
+            "production_countries": info["production_countries"],
+            "spoken_languages": info["spoken_languages"],
+            "original_language": info["original_language"],
+            "production_companies": info["production_companies"],
+
+            "actors": info["actors"],
+            "directors": info["directors"],
+
+            "tagline": info["tagline"],
+            "adult": info["adult"],
+
             "embedding": vector.tolist(),
         }
-        await upsert_movie(session, movie)
 
-       
+        await upsert_movie(session, movie_dict)
         added += 1
-
-        # периодически фиксируем (для больших объёмов)
         if added % 100 == 0:
             await session.commit()
             print(f"Сохранено {added} фильмов...")
 
-    await session.commit()
-    print(f"Готово! Добавлено {added} новых фильмов.")
 
+
+async def get_movies_by_profile_embedding(
+    session: AsyncSession,
+    user_id: int,
+    top_k: int = 50,
+) -> list[Movies]:
+    """Подобрать фильмы по эмбеддингу анкеты пользователя."""
+    user_anketa = await get_user_preferences(user_id, session)
+
+    
+
+    profile_vec = await asyncio.to_thread(
+        model.encode,
+        profile_text,
+    )
+    profile_vec = np.array(profile_vec, dtype="float32")
+
+    # 2. достаём кандидатов (пока просто все фильмы; потом можно оптимизировать)
+    result = await session.execute(select(Movies))
+    candidates: list[Movies] = result.scalars().all()
+
+    scored: list[tuple[float, Movies]] = []
+    for movie in candidates:
+        if not movie.embedding:
+            continue
+        mv = np.array(movie.embedding, dtype="float32")
+        sim = cosine_sim(profile_vec, mv)
+        scored.append((sim, movie))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [m for sim, m in scored[:top_k]]

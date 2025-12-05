@@ -23,18 +23,40 @@ class Users(Base):
 class Movies(Base):
     __tablename__ = "movies"
 
-    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)  
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     original_title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+
     vote_average: Mapped[float] = mapped_column(Float, nullable=False)
-    poster: Mapped[str | None] = mapped_column(String(512), nullable=True)  
-    release_date: Mapped[Date | None] = mapped_column(Date, nullable=True) 
-    genres: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list) 
-    runtime: Mapped[int | None] = mapped_column(Integer, nullable=True)      
+    vote_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    popularity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    poster: Mapped[str | None] = mapped_column(String(512), nullable=True)
     tmdb_poster_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    release_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
+    runtime: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    genres: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     keywords: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(DOUBLE_PRECISION), nullable=True)
+
+    # НОВОЕ:
+    production_countries: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    spoken_languages: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    original_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    production_companies: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+
+    actors: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    directors: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+
+    tagline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adult: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # эмбеддинг
+    embedding: Mapped[list[float] | None] = mapped_column(
+        ARRAY(DOUBLE_PRECISION), nullable=True
+    )
 
 
 

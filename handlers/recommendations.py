@@ -11,7 +11,7 @@ import asyncio
 
 from database.orm_query import add_movies_by_interaction, get_movies_by_interaction, check_recommendations_status, delete_movies_by_interaction
 from kbds.inline import get_callback_btns, subscribe_button, rate_buttons
-
+from database.orm_query import get_movies_by_profile_embedding
 
 from kbds.pagination import create_movie_carousel_keyboard
 from handlers.movie_utils import send_movie_card
@@ -87,6 +87,7 @@ async def safe_callback_answer(callback: CallbackQuery, text: str = None, show_a
 
 
 
+
 @recommendations_router.callback_query(F.data == 'recommendations')
 async def send_recommendations(callback: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext):
     try:
@@ -143,10 +144,30 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
             
 
     else:
-    # Получаем список фильмов
-        max_retries = 3
-        retries = 0
-        movies = []
+        movies = await get_movies_by_profile_embedding(session, user_id, top_k=50)
+
+        if not movies:
+            await callback.message.edit_text(
+                "Пока не смог подобрать фильмы по твоему профилю 🙈 Попробуй обновить анкету или сформулировать запрос вручную."
+            )
+            return
+
+        # 2. отправляем первый фильм так же, как в ветке с unwatched_movies
+        message = await send_movie_card(
+            callback.message,
+            movies[0],
+            0,
+            custom_keyboard=create_movie_carousel_keyboard
+        )
+
+        await state.set_state(Recomendations.waiting_for_action)
+        await state.update_data(
+            movies=movies,
+            current_index=0,
+            message_id=message.message_id,
+            chat_id=message.chat.id
+        )
+   
 
        
 
@@ -239,25 +260,32 @@ async def handle_movie_action(callback: CallbackQuery, callback_data: Menu_Callb
             await state.clear()
             return
         await safe_callback_answer(callback, "Подождите немного, подгружаем новые рекомендации...")
-
+        
+#Скорректировать функцию
         while True:
-            chat_gpt_response = await get_movie_recommendation_by_interaction(user_id, session, state=state)
-            movies_data = await get_movies(chat_gpt_response, user_id, session)
-            new_movies = await extract_movie_data(movies_data)
-            if new_movies:
-                message = await send_movie_card(callback.message, new_movies[0], 0, edit=True, custom_keyboard=create_movie_carousel_keyboard)
+            movies = await get_movies_by_profile_embedding(session, user_id, top_k=50)
 
-                await state.set_state(Recomendations.waiting_for_action)
-                await state.update_data(
-                    movies=new_movies,
-                    current_index=0,
-                    message_id=message.message_id,
-                    chat_id=message.chat.id
+            if not movies:
+                await callback.message.edit_text(
+                    "Пока не смог подобрать фильмы по твоему профилю 🙈 Попробуй обновить анкету или сформулировать запрос вручную."
                 )
-                await safe_callback_answer(callback)
                 return
-            
-            await safe_callback_answer(callback, "Не удалось получить рекомендации. Пробуем ещё раз...")
+
+            # 2. отправляем первый фильм так же, как в ветке с unwatched_movies
+            message = await send_movie_card(
+                callback.message,
+                movies[0],
+                0,
+                custom_keyboard=create_movie_carousel_keyboard
+            )
+
+            await state.set_state(Recomendations.waiting_for_action)
+            await state.update_data(
+                movies=movies,
+                current_index=0,
+                message_id=message.message_id,
+                chat_id=message.chat.id
+            )
         
 
 
