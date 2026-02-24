@@ -1,32 +1,44 @@
-from database.models import Users_anketa, Users, Movies, Users_interaction
-from sqlalchemy.ext.asyncio import AsyncSession
+import asyncio
+import json
+import logging
 from datetime import datetime
+
 from sqlalchemy import select, delete
-import aiohttp
-from sqlalchemy import update
-import os
-API_KEY_OMDB = os.getenv('OMDB_API_KEY')
-timeout = aiohttp.ClientTimeout(total=5)
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert
+
+from database.models import Users_anketa, Users, Movies, Users_interaction
+from database.embedding import get_model, build_movie_text, build_profile_text
+from database.engine import redis_client
+from database.tmdb_parser import tmdb_search_movie, load_all_tmdb_ids, get_popular_ids, fetch_movies_batch, get_popular_ids_async, TMDBFetcher
+import time
+
+PROFILE_VEC_TTL = 3600
+
+logger = logging.getLogger(__name__)
 
 
-
-#функция для добавления ответов пользователя в базу
 async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
     try:
         def get_answer(key: str) -> str:
             return ", ".join(data.get(f"{key}_selected", []))
 
-        # Подготавливаем данные
         mood = get_answer("question_1")
         genres = get_answer("question_2")
         era = get_answer("question_3")
         themes = get_answer("question_4")
         country = get_answer("question_5")
 
+        logger.info(
+            "[БД] Сохранение анкеты user_id=%s: mood='%s', genres='%s', era='%s', themes='%s', country='%s'",
+            user_id, mood, genres, era, themes, country,
+        )
+
         query = select(Users_anketa).where(Users_anketa.user_id == user_id)
         existing = await session.scalar(query)
 
         if existing:
+            logger.debug("[БД] user_id=%s — обновление существующей анкеты", user_id)
             existing.user_rec_status = True
             existing.mood = mood
             existing.genres = genres
@@ -34,6 +46,7 @@ async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
             existing.country = country
             existing.themes = themes
         else:
+            logger.debug("[БД] user_id=%s — создание новой анкеты", user_id)
             new_obj = Users_anketa(
                 user_id=user_id,
                 user_rec_status=True,
@@ -46,228 +59,426 @@ async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
             session.add(new_obj)
 
         await session.commit()
+        await invalidate_profile_cache(user_id)
+        logger.info("[БД] Анкета user_id=%s сохранена успешно", user_id)
 
     except Exception as e:
         await session.rollback()
-        raise e
+        logger.error("Ошибка сохранения анкеты user_id=%s: %s", user_id, e)
+        raise
 
 
-
-
-#функция для добавления пользователя в базу
 async def add_user(user_id: int, session: AsyncSession):
-    # Сначала проверяем, существует ли пользователь
     query = select(Users).where(Users.user_id == user_id)
     existing_user = await session.scalar(query)
-    
-    # Если пользователь не существует, создаем нового
+
     if not existing_user:
+        logger.info("[БД] Новый пользователь user_id=%s — регистрация", user_id)
         current_time = datetime.now()
         obj = Users(
             user_id=user_id,
             user_start_date=current_time,
-            user_end_date=current_time
+            user_end_date=current_time,
         )
         session.add(obj)
         await session.commit()
         return obj
-    
-    return existing_user  # Возвращаем существующего пользователя, если он уже есть
+
+    logger.debug("[БД] user_id=%s уже зарегистрирован", user_id)
+    return existing_user
 
 
-#функция для проверки статуса рекомендаций
 async def check_recommendations_status(user_id: int, session: AsyncSession):
-    query = select(Users_anketa.user_rec_status).where(Users_anketa.user_id  == user_id)
+    query = select(Users_anketa.user_rec_status).where(Users_anketa.user_id == user_id)
     status = await session.scalar(query)
     return status
 
 
-
-#функция для добавления фильма в базу по взаимодействию
-async def add_movies_by_interaction(user_id: int, movie_id: str, interaction_type: str, session: AsyncSession):
+async def add_movies_by_interaction(
+    user_id: int, movie_id: int, interaction_type: str, session: AsyncSession
+):
     try:
-        # Проверяем существование записи
         query = select(Users_interaction).where(
             Users_interaction.user_id == user_id,
-            Users_interaction.movie_id == movie_id
+            Users_interaction.movie_id == movie_id,
         )
         existing = await session.scalar(query)
-        
+
         if existing:
-            # Если запись существует, обновляем тип взаимодействия
+            logger.debug("[БД] user_id=%s, movie_id=%s — обновляю interaction: %s → %s", user_id, movie_id, existing.interaction_type, interaction_type)
             existing.interaction_type = interaction_type
         else:
-            # Если записи нет, создаем новую
+            logger.debug("[БД] user_id=%s, movie_id=%s — новый interaction: %s", user_id, movie_id, interaction_type)
             obj = Users_interaction(
                 user_id=user_id,
                 movie_id=movie_id,
-                interaction_type=interaction_type
+                interaction_type=interaction_type,
             )
             session.add(obj)
-        
+
         await session.commit()
 
-        
     except Exception as e:
         await session.rollback()
+        logger.error("[БД] Ошибка add_movies_by_interaction (user=%s, movie=%s, type=%s): %s", user_id, movie_id, interaction_type, e)
         raise
 
-#функция для получения фильмов по взаимодействию
-async def get_movies_by_interaction(user_id: int, session: AsyncSession, interaction_types: list = None):
-    #logger.debug(f"Получение фильмов для пользователя {user_id}, типы взаимодействия: {interaction_types}")
-    
-    # Начальный запрос
+
+async def get_movies_by_interaction(
+    user_id: int, session: AsyncSession, interaction_types: list | None = None
+) -> list[Movies]:
     query = select(Movies).join(Users_interaction).where(Users_interaction.user_id == user_id)
-    
-    # Если переданы типы взаимодействия, фильтруем по ним
+
     if interaction_types:
         query = query.where(Users_interaction.interaction_type.in_(interaction_types))
-    
+
     try:
-        # Выполняем запрос
         result = await session.scalars(query)
-        movies = result.all()
-        #logger.debug(f"Найдено {len(movies)} фильмов")
+        movies = list(result.all())
+        logger.debug("[БД] get_movies_by_interaction: user_id=%s, types=%s → найдено %d", user_id, interaction_types, len(movies))
         return movies
     except Exception as e:
+        logger.error("[БД] Ошибка get_movies_by_interaction (user=%s, types=%s): %s", user_id, interaction_types, e)
         return []
-    
-async def delete_movies_by_interaction(user_id: int, session: AsyncSession, interaction_types: list = None, movie_id: str = None):
-    """Удаляет фильмы из базы данных по типу взаимодействия пользователя (like, dislike, unwatched)"""
-    
+
+
+async def get_interacted_movie_ids(user_id: int, session: AsyncSession) -> set[int]:
+    """Возвращает set tmdb_id фильмов, с которыми пользователь уже взаимодействовал."""
+    query = select(Users_interaction.movie_id).where(Users_interaction.user_id == user_id)
+    result = await session.scalars(query)
+    return set(result.all())
+
+
+async def delete_movies_by_interaction(
+    user_id: int,
+    session: AsyncSession,
+    interaction_types: list | None = None,
+    movie_id: int | None = None,
+):
     try:
-        # Начальный запрос на выборку фильмов для пользователя
         query = select(Users_interaction).where(Users_interaction.user_id == user_id)
-        
-        # Если переданы типы взаимодействия, фильтруем по ним
+
         if interaction_types:
             query = query.where(Users_interaction.interaction_type.in_(interaction_types))
-            
-        # Если передан ID фильма, фильтруем по нему
+
         if movie_id:
             query = query.where(Users_interaction.movie_id == movie_id)
 
-        # Выполняем запрос для получения всех записей
         result = await session.execute(query)
         interactions = result.scalars().all()
 
-        # Если записей нет
         if not interactions:
+            logger.debug("[БД] delete_movies_by_interaction: user_id=%s — нечего удалять (types=%s, movie=%s)", user_id, interaction_types, movie_id)
             return
 
-        # Логируем количество найденных записей
-   
-
-
-        # Для каждого взаимодействия удаляем запись
+        logger.info("[БД] delete_movies_by_interaction: user_id=%s — удаляю %d записей (types=%s, movie=%s)", user_id, len(interactions), interaction_types, movie_id)
         for interaction in interactions:
-            # Удаляем запись из таблицы взаимодействий
-            await session.execute(delete(Users_interaction).where(Users_interaction.id == interaction.id))
+            await session.execute(
+                delete(Users_interaction).where(Users_interaction.id == interaction.id)
+            )
 
-        # Подтверждаем изменения
         await session.commit()
-
-        #logger.info(f"Удалены {len(interactions)} фильмов для пользователя {user_id}")
 
     except Exception as e:
         await session.rollback()
+        logger.error("[БД] Ошибка delete_movies_by_interaction (user=%s, types=%s, movie=%s): %s", user_id, interaction_types, movie_id, e)
         raise
 
 
-#функция для получения предпочтений пользователя
 async def get_user_preferences(user_id: int, session: AsyncSession):
     query = select(Users_anketa).where(Users_anketa.user_id == user_id)
-    preferences = await session.scalar(query)
-    return preferences
+    return await session.scalar(query)
 
 
-
-async def add_movie(
-    movie_id: str,
-    movie_name: str,
-    movie_description: str,
-    movie_rating: float,
-    movie_poster: str,
-    movie_year: int,
-    movie_genre: str,
-    movie_duration: str,  # строка, а не int
-    movie_type: str,      # 👈 добавлено
-    session: AsyncSession,
-    movie_omdb_poster: str = ""
-):
-    obj = Movies(
-        imdb=movie_id,
-        movie_name=movie_name,
-        movie_description=movie_description,
-        movie_year=movie_year,
-        movie_poster=movie_poster,
-        movie_rating=movie_rating,
-        movie_genre=movie_genre,
-        movie_duration=movie_duration,
-        movie_type=movie_type,
-        movie_omdb_poster=movie_omdb_poster or ""     # 👈 передаём в БД
-    )
-    session.add(obj)
-    await session.commit()
-
-# database/orm_query.py
-async def add_omdb_poster_to_db(imdb_id: str, session: AsyncSession) -> str:
-    url = f"http://www.omdbapi.com/?i={imdb_id}&apikey={API_KEY_OMDB}"
-    async with aiohttp.ClientSession() as http:
-        async with http.get(url) as response:
-            data = await response.json()
-            poster = data.get("Poster", "")
-            if poster and poster != "N/A":
-                await session.execute(
-                    update(Movies).where(Movies.imdb == imdb_id).values(movie_omdb_poster=poster)
-                )
-                await session.commit()
-                return poster
-    return ""
+async def get_movie_from_db(tmdb_id: int, session: AsyncSession):
+    query = select(Movies).where(Movies.tmdb_id == tmdb_id)
+    return await session.scalar(query)
 
 
-
-#функция для проверки существования фильма в базе
-async def get_movie_from_db(imdb: str, session: AsyncSession):
-    query = select(Movies).where(Movies.imdb == imdb)
-    movie = await session.scalar(query)
-    return movie
-
-async def get_movies_from_db_by_imdb_list(imdb_ids: list[str], session: AsyncSession) -> dict:
-    """Получает фильмы из базы данных по списку IMDb ID и возвращает словарь {imdb: movie}"""
-    if not imdb_ids:
+async def get_movies_from_db_by_tmdb_list(tmdb_ids: list[int], session: AsyncSession) -> dict:
+    if not tmdb_ids:
         return {}
-
-    stmt = select(Movies).where(Movies.imdb.in_(imdb_ids))
+    stmt = select(Movies).where(Movies.tmdb_id.in_(tmdb_ids))
     result = await session.scalars(stmt)
-    return {movie.imdb: movie for movie in result}
+    return {movie.tmdb_id: movie for movie in result}
 
 
-async def reset_anketa_in_db(user_id: int, session: AsyncSession):
+async def reset_anketa_in_db(user_id: int, session: AsyncSession) -> str:
     try:
-        # Ищем анкету пользователя в базе
         query = select(Users_anketa).where(Users_anketa.user_id == user_id)
         anketa = await session.scalar(query)
-        
+
         if not anketa:
-            raise ValueError(f"Анкета для пользователя {user_id} не найдена.")
-        
-        # Сбрасываем все поля анкеты на начальные значения
-        anketa.user_rec_status = False  # Статус рекомендаций
+            return "Анкета не найдена"
+
+        anketa.user_rec_status = False
         anketa.mood = ""
         anketa.genres = ""
         anketa.era = ""
         anketa.country = ""
         anketa.themes = ""
-    
-        
-        # Сохраняем изменения в базе данных
+
         await session.commit()
+        await invalidate_profile_cache(user_id)
         return "Анкета успешно сброшена"
-    
+
     except Exception as e:
         await session.rollback()
+        logger.error("Ошибка при сбросе анкеты user_id=%s: %s", user_id, e)
         return f"Ошибка при сбросе анкеты: {e}"
 
 
-                                
+async def load_existing_tmdb_ids(session: AsyncSession) -> set[int]:
+    result = await session.execute(select(Movies.tmdb_id))
+    return set(result.scalars().all())
+
+
+async def upsert_movie(session: AsyncSession, movie_dict: dict):
+    stmt = insert(Movies).values(**movie_dict)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[Movies.tmdb_id],
+        set_=movie_dict,
+    )
+    await session.execute(stmt)
+
+
+async def upsert_movies_bulk(session: AsyncSession, movie_dicts: list[dict]):
+    """Батчевый upsert — один INSERT на всю пачку."""
+    if not movie_dicts:
+        return
+    stmt = insert(Movies).values(movie_dicts)
+    update_cols = {c.name: c for c in stmt.excluded if c.name != "tmdb_id"}
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[Movies.tmdb_id],
+        set_=update_cols,
+    )
+    await session.execute(stmt)
+
+
+def _info_to_movie_dict(info: dict, embedding: list[float]) -> dict:
+    return {
+        "tmdb_id": info["id"],
+        "title": info["title"],
+        "original_title": info["original_title"],
+        "description": info["overview"],
+        "vote_average": info["vote_average"],
+        "vote_count": info["vote_count"],
+        "popularity": info["popularity"],
+        "poster": info["poster_path"],
+        "tmdb_poster_path": info["poster_path"],
+        "release_date": info["release_date"],
+        "runtime": info["runtime"],
+        "genres": info["genres"],
+        "keywords": info["keywords"],
+        "production_countries": info["production_countries"],
+        "spoken_languages": info["spoken_languages"],
+        "original_language": info["original_language"],
+        "production_companies": info["production_companies"],
+        "actors": info["actors"],
+        "directors": info["directors"],
+        "tagline": info["tagline"],
+        "adult": info["adult"],
+        "embedding": embedding,
+    }
+
+
+BATCH_SIZE = 1000
+
+
+def _fmt_eta(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f} сек"
+    if seconds < 3600:
+        return f"{seconds / 60:.1f} мин"
+    return f"{seconds / 3600:.1f} ч"
+
+
+async def update_movies_db(
+    session: AsyncSession,
+    language: str = "ru-RU",
+    limit: int | None = None,
+    source: str = "popular",
+):
+    t_total = time.monotonic()
+
+    # 1) Получаем список ID
+    if source == "file":
+        logger.info("[1/4] Загрузка ID из movie_ids.txt...")
+        t0 = time.monotonic()
+        all_ids = await asyncio.to_thread(load_all_tmdb_ids, "movie_ids.txt")
+        logger.info("[1/4] Загружено %d ID из файла за %.1f сек", len(all_ids), time.monotonic() - t0)
+    else:
+        logger.info("[1/4] Загрузка popular ID с TMDB...")
+        t0 = time.monotonic()
+        all_ids = await get_popular_ids_async(50)
+        logger.info("[1/4] Получено %d ID за %.1f сек", len(all_ids), time.monotonic() - t0)
+
+    # 2) Фильтруем уже существующие
+    existing_ids = await load_existing_tmdb_ids(session)
+    new_ids = [mid for mid in all_ids if mid not in existing_ids]
+
+    if limit:
+        new_ids = new_ids[:limit]
+
+    logger.info("[2/4] Новых: %d | В БД: %d | Всего ID: %d", len(new_ids), len(existing_ids), len(all_ids))
+    if not new_ids:
+        logger.info("Нечего добавлять, выход")
+        return
+
+    # 3) Загрузка модели
+    logger.info("[3/4] Загрузка модели эмбеддингов...")
+    t0 = time.monotonic()
+    model = get_model()
+    logger.info("[3/4] Модель готова за %.1f сек", time.monotonic() - t0)
+
+    total_added = 0
+    total_target = len(new_ids)
+    total_batches = (total_target + BATCH_SIZE - 1) // BATCH_SIZE
+    batch_times: list[float] = []
+
+    fetcher = TMDBFetcher(max_concurrent=40, language=language)
+
+    try:
+        for batch_num, batch_start in enumerate(range(0, total_target, BATCH_SIZE), 1):
+            batch_ids = new_ids[batch_start : batch_start + BATCH_SIZE]
+            t_batch = time.monotonic()
+
+            # --- TMDB API ---
+            t0 = time.monotonic()
+            movies_info, stats = await fetcher.fetch_batch(batch_ids)
+            dt_api = time.monotonic() - t0
+
+            if not movies_info:
+                logger.warning(
+                    "  Батч %d/%d пустой (fetched=%d, skip=%d, err=%d, 429=%d) — %.1f сек",
+                    batch_num, total_batches, stats["fetched"], stats["skipped"],
+                    stats["errors"], stats.get("rate_limited", 0), dt_api,
+                )
+                continue
+
+            # --- Эмбеддинги ---
+            t0 = time.monotonic()
+            texts = [build_movie_text(info) for info in movies_info]
+            vectors = await asyncio.to_thread(model.encode, texts, batch_size=256)
+            dt_emb = time.monotonic() - t0
+
+            # --- Запись в БД ---
+            t0 = time.monotonic()
+            movie_dicts = [
+                _info_to_movie_dict(info, vec.tolist())
+                for info, vec in zip(movies_info, vectors)
+            ]
+            await upsert_movies_bulk(session, movie_dicts)
+            await session.commit()
+            dt_db = time.monotonic() - t0
+
+            total_added += len(movie_dicts)
+            dt_batch_total = time.monotonic() - t_batch
+            batch_times.append(dt_batch_total)
+
+            avg_batch = sum(batch_times) / len(batch_times)
+            remaining = (total_batches - batch_num) * avg_batch
+
+            logger.info(
+                "[4/4] Батч %d/%d | +%d фильмов | API %.1fs (%d ok/%d skip/%d err/%d 429) | "
+                "Emb %.1fs | DB %.1fs | Батч %.1fs | %d/%d (%.0f%%) | ETA %s",
+                batch_num, total_batches, len(movie_dicts),
+                dt_api, stats["fetched"], stats["skipped"], stats["errors"],
+                stats.get("rate_limited", 0),
+                dt_emb, dt_db, dt_batch_total,
+                total_added, total_target,
+                total_added / total_target * 100,
+                _fmt_eta(remaining),
+            )
+    finally:
+        await fetcher.close()
+
+    dt_total = time.monotonic() - t_total
+    logger.info(
+        "===== ГОТОВО: %d фильмов за %s (%.0f фильмов/сек) =====",
+        total_added, _fmt_eta(dt_total), total_added / max(dt_total, 0.01),
+    )
+
+
+async def _get_profile_vec(user_id: int, session: AsyncSession) -> list[float] | None:
+    """Возвращает эмбеддинг профиля: из Redis-кэша или вычисляет и кэширует."""
+    cache_key = f"profile_vec:{user_id}"
+
+    try:
+        cached = await redis_client.get(cache_key)
+        if cached:
+            logger.debug("[Кэш] user_id=%s — profile_vec из Redis", user_id)
+            return json.loads(cached)
+    except Exception as e:
+        logger.warning("[Кэш] Ошибка чтения Redis для user_id=%s: %s", user_id, e)
+
+    user_anketa = await get_user_preferences(user_id, session)
+    if not user_anketa:
+        logger.warning("[Эмбеддинг] Анкета пользователя %s не найдена", user_id)
+        return None
+
+    profile_text = build_profile_text(user_anketa)
+    if not profile_text.strip():
+        logger.warning("[Эмбеддинг] user_id=%s — профильный текст пуст", user_id)
+        return None
+
+    logger.debug("[Эмбеддинг] user_id=%s — вычисляю profile_vec: '%s'", user_id, profile_text[:200])
+
+    model = get_model()
+    profile_vec = await asyncio.to_thread(model.encode, profile_text)
+    profile_vec = profile_vec.tolist()
+
+    try:
+        await redis_client.set(cache_key, json.dumps(profile_vec), ex=PROFILE_VEC_TTL)
+        logger.debug("[Кэш] user_id=%s — profile_vec сохранён в Redis (TTL=%ds)", user_id, PROFILE_VEC_TTL)
+    except Exception as e:
+        logger.warning("[Кэш] Ошибка записи Redis для user_id=%s: %s", user_id, e)
+
+    return profile_vec
+
+
+async def invalidate_profile_cache(user_id: int):
+    """Удаляет кэш эмбеддинга профиля при изменении анкеты."""
+    try:
+        await redis_client.delete(f"profile_vec:{user_id}")
+        logger.debug("[Кэш] user_id=%s — profile_vec инвалидирован", user_id)
+    except Exception as e:
+        logger.warning("[Кэш] Ошибка инвалидации Redis для user_id=%s: %s", user_id, e)
+
+
+async def get_movies_by_profile_embedding(
+    session: AsyncSession,
+    user_id: int,
+    top_k: int = 50,
+) -> list[Movies]:
+    """Подобрать фильмы по эмбеддингу анкеты пользователя (pgvector HNSW)."""
+    logger.info("[Эмбеддинг] Подбор фильмов для user_id=%s (top_k=%d)", user_id, top_k)
+
+    profile_vec = await _get_profile_vec(user_id, session)
+    if profile_vec is None:
+        return []
+
+    interacted_ids = await get_interacted_movie_ids(user_id, session)
+    logger.debug("[Эмбеддинг] user_id=%s — уже взаимодействовал с %d фильмами", user_id, len(interacted_ids))
+
+    query = select(Movies).where(Movies.embedding.is_not(None))
+    if interacted_ids:
+        query = query.where(Movies.tmdb_id.not_in(interacted_ids))
+
+    query = query.order_by(
+        Movies.embedding.cosine_distance(profile_vec)
+    ).limit(top_k)
+
+    result = await session.scalars(query)
+    top_movies = list(result.all())
+
+    if top_movies:
+        best = top_movies[0]
+        logger.info(
+            "[Эмбеддинг] user_id=%s — топ-1: '%s' (tmdb_id=%s), всего подобрано: %d",
+            user_id, best.title, best.tmdb_id, len(top_movies),
+        )
+    else:
+        logger.warning("[Эмбеддинг] user_id=%s — не найдено подходящих фильмов", user_id)
+
+    return top_movies

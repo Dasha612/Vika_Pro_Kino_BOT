@@ -1,0 +1,11 @@
+# Зависимости для manage_db.py (управление БД без запуска бота)
+# Установка: pip install -r requirements-manage.txt
+SQLAlchemy==2.0.46
+asyncpg==0.30.0
+python-dotenv==1.1.0
+numpy
+sentence-transformers
+tmdbsimple
+requests
+tqdm
+aiohttp==3.11.14

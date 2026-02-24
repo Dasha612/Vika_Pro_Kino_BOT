@@ -12,3 +12,10 @@ Telegram-бот для персонализированных рекоменда
 🛠 Технологии
 Python 3.11+
 Aiogram 3.x (асинхронный фреймворк для Telegram)
+
+
+DB_URL=postgresql+asyncpg://bot_admin:vikabot@localhost:5432/kinobot python manage_db.py update-movies --limit 1000 
+DB_URL=postgresql+asyncpg://bot_admin:vikabot@localhost:5432/kinobot python manage_db.py update-movies --source file --limit 10000 
+
+docker compose down -v
+docker compose up --build -d
