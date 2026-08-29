@@ -2,7 +2,7 @@ from typing import Optional
 from datetime import date, datetime
 
 from sqlalchemy.orm import Mapped, DeclarativeBase, mapped_column, relationship
-from sqlalchemy import BigInteger, TIMESTAMP, Text, String, Float, Date, Integer, ForeignKey, Boolean, Index
+from sqlalchemy import BigInteger, TIMESTAMP, Text, String, Float, Date, Integer, ForeignKey, Boolean, Index, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.types import JSON
 from pgvector.sqlalchemy import Vector
@@ -94,4 +94,7 @@ class Users_interaction(Base):
 
     __table_args__ = (
         Index("ix_user_interaction", "user_id", "interaction_type"),
+        # Одна строка на пару «юзер + фильм». На неё опирается ON CONFLICT
+        # в add_movies_by_interaction — без констрейнта upsert работать не будет.
+        UniqueConstraint("user_id", "movie_id", name="uq_user_movie"),
     )

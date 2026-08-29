@@ -25,14 +25,12 @@ session_maker = async_sessionmaker(
 redis_client: Redis = Redis.from_url(cfg.redis_url, decode_responses=True)
 
 
-async def create_db():
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("pgvector расширение активировано, таблицы БД созданы / проверены")
-
-
 async def drop_db():
+    """Схему создаёт Alembic (database/migrate.py), а не create_all — иначе
+    изменения вроде uq_user_movie не доезжают до уже существующей базы."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+        # Без этого в базе остаётся отметка «ревизия 0002 применена»,
+        # и следующий upgrade решит, что делать нечего — таблиц не будет вообще.
+        await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
     logger.warning("Все таблицы БД удалены")

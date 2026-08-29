@@ -1,7 +1,15 @@
 import logging
+import os
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Имя берётся из окружения, потому что Dockerfile скачивает модель в образ по этой же
+# переменной. Захардкоженное здесь имя разъехалось бы с тем, что реально лежит в образе,
+# а с HF_HUB_OFFLINE=1 это не тихая перекачка, а падение на старте.
+# Дефолт оставлен, чтобы запуск без docker работал как раньше.
+MODEL_NAME = os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
 
 _model = None
 
@@ -11,8 +19,8 @@ def get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
-        logger.info("Загрузка модели paraphrase-multilingual-MiniLM-L12-v2...")
-        _model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        logger.info("Загрузка модели %s...", MODEL_NAME)
+        _model = SentenceTransformer(MODEL_NAME)
         logger.info("Модель загружена")
     return _model
 

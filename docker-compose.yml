@@ -1,4 +1,12 @@
-version: "3.9"
+# Общие настройки логов. Драйвер json-file по умолчанию пишет без ограничений:
+# на сервере, который работает месяцами, это однажды забивает диск — а на забитом
+# диске Postgres не стартует и бот падает не там, где искал бы причину.
+# 10 МБ × 3 файла на сервис = максимум 120 МБ логов на весь проект.
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   db:
@@ -8,8 +16,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-kinobot_db}
       POSTGRES_USER: ${POSTGRES_USER:-kinobot_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kinobot_password}
+    # Префикс 127.0.0.1 обязателен. Без него docker публикует порт на 0.0.0.0,
+    # то есть на публичный IP сервера — и ufw это НЕ закроет, docker пишет свои
+    # правила мимо него. Боту порт наружу не нужен: внутри compose он ходит
+    # на хост `db` по внутренней сети. Снаружи — только через ssh -L.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -19,12 +31,15 @@ services:
       retries: 5
       start_period: 15s
     restart: unless-stopped
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
     container_name: kinobot_redis
+    # То же самое, и здесь важнее: Redis по умолчанию вообще без пароля,
+    # а открытый в интернет 6379 находят сканерами за часы.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -33,6 +48,7 @@ services:
       timeout: 3s
       retries: 3
     restart: unless-stopped
+    logging: *default-logging
 
   bot:
     build: .
@@ -44,14 +60,17 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    # /health нужен для проверки с самого сервера, наружу его светить незачем.
+    # На healthcheck ниже это не влияет: он идёт изнутри контейнера.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 5s
       retries: 3
     restart: unless-stopped
+    logging: *default-logging
 
   worker:
     build: .
@@ -63,6 +82,7 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   pg_data:

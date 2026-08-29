@@ -2,20 +2,29 @@ import logging
 import asyncio
 
 from aiogram import types, Router, Bot, F
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.orm_query import orm_add_user_rec_set, add_user, check_recommendations_status, reset_anketa_in_db
-from kbds.inline import get_callback_btns, subscribe_button, get_multi_select_keyboard
+from database.orm_query import orm_add_user_rec_set, check_recommendations_status, reset_anketa_in_db
+from kbds.inline import (
+    AFTER_ANKETA_BTNS,
+    MAIN_MENU_BTNS,
+    get_callback_btns,
+    get_multi_select_keyboard,
+    subscribe_button,
+)
 from chat_gpt.questions import questions, QUESTION_KEYS, CALLBACK_IDS
 from config import cfg
 
 logger = logging.getLogger(__name__)
 
 anketa_router = Router()
+
+# Пауза между репликами после анкеты. Было 1.2 — три подряд давали 3,6 секунды тишины.
+TYPING_PAUSE = 0.5
 
 
 class Anketa(StatesGroup):
@@ -26,23 +35,12 @@ class Anketa(StatesGroup):
     question_5 = State()
 
 
-MAIN_MENU_BTNS = {
-    "Мой профиль": "my_profile",
-    "Избранное": "favourites",
-    "Рекомендации": "choose_option",
-}
-
-AFTER_ANKETA_BTNS = {
-    "Запуск рекомендаций": "recommendations",
-    "Свой запрос": "search_movie",
-    "Найти фильм вместе": "find_together",
-    "Вернуться в меню": "my_profile",
-}
-
-
-@anketa_router.callback_query(StateFilter(None), F.data == "set_profile")
+@anketa_router.callback_query(F.data == "set_profile")
 async def registration_start(callback: CallbackQuery, state: FSMContext):
     logger.info("[Анкета] user_id=%s нажал 'Заполнить анкету' — начинаем опрос", callback.from_user.id)
+    # Раньше здесь стоял StateFilter(None): при любом активном состоянии хендлер
+    # просто не находился, callback оставался без ответа и у юзера висел спиннер.
+    await state.clear()
     question_key = QUESTION_KEYS[0]
     await state.set_state(getattr(Anketa, question_key))
     markup = get_multi_select_keyboard(CALLBACK_IDS[question_key], set(), question_key)
@@ -115,7 +113,6 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
     if next_index >= len(QUESTION_KEYS):
         logger.info("[Анкета] user_id=%s — все вопросы заполнены, сохраняю анкету", callback.from_user.id)
         await state.clear()
-        await state.update_data(preferences_priority=True)
         try:
             await orm_add_user_rec_set(callback.from_user.id, session, data)
             logger.info("[Анкета] user_id=%s — анкета успешно сохранена в БД", callback.from_user.id)
@@ -127,21 +124,21 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
         if message_id:
             try:
                 await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
-                await asyncio.sleep(1.2)
+                await asyncio.sleep(TYPING_PAUSE)
                 await callback.bot.edit_message_text(
                     chat_id=callback.message.chat.id,
                     message_id=message_id,
                     text="Уфф... Все ответы записал",
                 )
                 await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
-                await asyncio.sleep(1.2)
+                await asyncio.sleep(TYPING_PAUSE)
                 await callback.bot.edit_message_text(
                     chat_id=callback.message.chat.id,
                     message_id=message_id,
                     text="Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить",
                 )
                 await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
-                await asyncio.sleep(1.2)
+                await asyncio.sleep(TYPING_PAUSE)
                 await callback.bot.edit_message_text(
                     chat_id=callback.message.chat.id,
                     message_id=message_id,
@@ -157,9 +154,9 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
                 )
         else:
             await callback.message.answer("Уфф... Все ответы записал")
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(TYPING_PAUSE)
             await callback.message.answer("Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить")
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(TYPING_PAUSE)
             await callback.message.answer(
                 "<b>Выбери, что ты хочешь сделать</b>",
                 parse_mode="HTML",
@@ -198,33 +195,25 @@ async def cancel_cmd(message: types.Message, state: FSMContext):
     await message.answer("Действие отменено", reply_markup=types.ReplyKeyboardRemove())
 
 
-@anketa_router.callback_query(StateFilter("*"), F.data == "Назад")
-async def handle_back(callback: CallbackQuery, state: FSMContext):
+@anketa_router.message(Command("reset"), StateFilter("*"))
+async def reset_cmd(message: types.Message, state: FSMContext):
+    """Аварийный выход. StateFilter('*') обязателен: без него команда не сработает
+    именно в processing — то есть ровно тогда, когда она и нужна."""
     current_state = await state.get_state()
-    logger.info("[Анкета] user_id=%s нажал 'Назад', текущее состояние: %s", callback.from_user.id, current_state)
-    states_list = Anketa.__all_states__
-    current_index = next((i for i, step in enumerate(states_list) if step.state == current_state), None)
-
-    if current_index is None or current_index == 0:
-        logger.debug("[Анкета] user_id=%s — уже на первом вопросе, назад нельзя", callback.from_user.id)
-        await callback.message.answer("Ты на первом вопросе. Назад нельзя")
-        await callback.answer()
-        return
-
-    previous_state = states_list[current_index - 1]
-    logger.info("[Анкета] user_id=%s — возврат к вопросу %d", callback.from_user.id, current_index)
-    await state.set_state(previous_state)
-    await callback.message.edit_text(
-        questions[current_index - 1],
-        reply_markup=get_callback_btns(btns={"Назад": "Назад"}),
+    logger.info("[Сброс] user_id=%s вызвал /reset, состояние было: %s", message.from_user.id, current_state)
+    await state.clear()
+    await message.answer(
+        "Состояние сброшено. Выберите пункт из меню.",
+        reply_markup=get_callback_btns(btns=MAIN_MENU_BTNS),
     )
-    await callback.answer()
 
 
-@anketa_router.message(CommandStart())
+@anketa_router.message(CommandStart(), StateFilter("*"))
 async def start_cmd(message: types.Message, session: AsyncSession, state: FSMContext):
     logger.info("[Старт] user_id=%s (%s) вызвал /start", message.from_user.id, message.from_user.full_name)
-    await add_user(message.from_user.id, session)
+    # Без очистки застрявший пользователь не выберется даже через /start.
+    # Регистрация пользователя переехала в DataBaseSession — она нужна на любом входе, не только на /start.
+    await state.clear()
 
     start_message = await message.answer(
         "Привет!\n"

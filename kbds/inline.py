@@ -27,6 +27,25 @@ def get_inlineMix_btns(*, btns: dict[str, str], sizes: tuple[int] = (2,)):
     return keyboard.adjust(*sizes).as_markup()
 
 
+MAIN_MENU_BTNS = {
+    "Мой профиль": "my_profile",
+    "Избранное": "favourites",
+    "Рекомендации": "choose_option",
+}
+
+AFTER_ANKETA_BTNS = {
+    "Запуск рекомендаций": "recommendations",
+    "Свой запрос": "search_movie",
+    "Вернуться в меню": "to_the_main_page",
+}
+
+RECOMMENDATIONS_MENU_BTNS = {
+    "Запуск рекомендаций": "recommendations",
+    "Свой запрос": "search_movie",
+    "Вернуться в меню": "to_the_main_page",
+}
+
+
 _channel_url = f"https://t.me/{cfg.channel_id}" if cfg.channel_id else "https://t.me/"
 
 subscribe_button = InlineKeyboardMarkup(

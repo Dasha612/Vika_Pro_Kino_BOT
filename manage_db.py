@@ -2,13 +2,14 @@ import argparse
 import asyncio
 
 from config import setup_logging
-from database.engine import create_db, drop_db, session_maker
+from database.engine import drop_db, session_maker
+from database.migrate import run_migrations
 from database.orm_query import update_movies_db
 
 
-async def cmd_create_db():
-    await create_db()
-    print("База создана (если таблиц не было).")
+async def cmd_migrate():
+    await run_migrations()
+    print("Схема БД приведена к последней ревизии.")
 
 
 async def cmd_drop_db(force: bool):
@@ -20,6 +21,9 @@ async def cmd_drop_db(force: bool):
 
 
 async def cmd_update_movies(limit: int | None, source: str):
+    # Наполнение обычно запускают до первого старта бота, когда таблиц ещё нет.
+    # upgrade идемпотентен: на актуальной схеме он просто ничего не делает.
+    await run_migrations()
     async with session_maker() as session:
         await update_movies_db(session, language="ru-RU", limit=limit, source=source)
     print("Фильмы обновлены.")
@@ -32,8 +36,8 @@ async def cmd_refresh_ids():
 
 
 async def main_async(args):
-    if args.command == "create-db":
-        await cmd_create_db()
+    if args.command == "migrate":
+        await cmd_migrate()
     elif args.command == "drop-db":
         await cmd_drop_db(force=args.force)
     elif args.command == "update-movies":
@@ -48,7 +52,7 @@ def main():
     parser = argparse.ArgumentParser(description="Управление БД кино-бота")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("create-db", help="Создать структуру БД")
+    subparsers.add_parser("migrate", help="Применить миграции Alembic (создаёт схему с нуля)")
 
     drop_parser = subparsers.add_parser("drop-db", help="Удалить БД (ОПАСНО)")
     drop_parser.add_argument("--force", action="store_true", help="Подтверждение удаления")

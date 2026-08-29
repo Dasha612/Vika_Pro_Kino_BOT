@@ -19,6 +19,8 @@ pip-delete-this-directory.txt
 # Environments
 .env
 .env.*
+# ...кроме шаблона — он должен лежать в репозитории
+!.env.example
 
 # MyPy
 .mypy_cache/
@@ -38,6 +40,9 @@ coverage.xml
 # IDEs
 .vscode/
 .idea/
+
+# Claude Code — локальные настройки и история сессий
+.claude/
 
 # SQLite and other local DBs
 *.sqlite3

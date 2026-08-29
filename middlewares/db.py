@@ -5,9 +5,19 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from typing import Any, Awaitable, Callable, Dict
 
 from config import cfg
+from database.orm_query import add_user
 from kbds.inline import subscribe_button
 
 logger = logging.getLogger(__name__)
+
+
+def extract_user_id(event: TelegramObject) -> int | None:
+    if isinstance(event, Update):
+        if event.message:
+            return event.message.from_user.id
+        if event.callback_query:
+            return event.callback_query.from_user.id
+    return None
 
 
 class DataBaseSession(BaseMiddleware):
@@ -22,6 +32,13 @@ class DataBaseSession(BaseMiddleware):
     ) -> Any:
         async with self.session_pool() as session:
             data["session"] = session
+
+            # Регистрируем на любом входе, а не только на /start: иначе клик по кнопке
+            # в старом сообщении падал бы по внешнему ключу на users_anketa / users_interaction.
+            user_id = extract_user_id(event)
+            if user_id is not None:
+                await add_user(user_id, session)
+
             try:
                 return await handler(event, data)
             except Exception as e:

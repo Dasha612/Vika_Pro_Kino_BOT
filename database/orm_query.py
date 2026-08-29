@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
@@ -14,6 +14,15 @@ from database.tmdb_parser import tmdb_search_movie, load_all_tmdb_ids, get_popul
 import time
 
 PROFILE_VEC_TTL = 3600
+
+# Сколько кандидатов HNSW просматривает при обходе индекса. По умолчанию в pgvector
+# это 40 — меньше, чем LIMIT 50 в подборе по профилю, и тогда индекс физически
+# не может вернуть полный список: выдача получается короче и хуже, чем реально есть в базе.
+EF_SEARCH = 200
+
+# Свободный текст юзера обрезаем: модель всё равно смотрит только первые ~128 токенов,
+# а огромная строка — лишняя работа и лишний повод для сюрпризов.
+MAX_QUERY_LEN = 500
 
 logger = logging.getLogger(__name__)
 
@@ -98,24 +107,20 @@ async def add_movies_by_interaction(
     user_id: int, movie_id: int, interaction_type: str, session: AsyncSession
 ):
     try:
-        query = select(Users_interaction).where(
-            Users_interaction.user_id == user_id,
-            Users_interaction.movie_id == movie_id,
-        )
-        existing = await session.scalar(query)
-
-        if existing:
-            logger.debug("[БД] user_id=%s, movie_id=%s — обновляю interaction: %s → %s", user_id, movie_id, existing.interaction_type, interaction_type)
-            existing.interaction_type = interaction_type
-        else:
-            logger.debug("[БД] user_id=%s, movie_id=%s — новый interaction: %s", user_id, movie_id, interaction_type)
-            obj = Users_interaction(
-                user_id=user_id,
-                movie_id=movie_id,
-                interaction_type=interaction_type,
+        # Раньше здесь был read-then-write: SELECT, потом INSERT или UPDATE.
+        # Между этими двумя шагами второй быстрый тап успевал вставить свою строку,
+        # и в таблице появлялся дубль — фильм потом показывался в избранном дважды.
+        # ON CONFLICT решает это на стороне БД, опираясь на uq_user_movie.
+        stmt = (
+            insert(Users_interaction)
+            .values(user_id=user_id, movie_id=movie_id, interaction_type=interaction_type)
+            .on_conflict_do_update(
+                constraint="uq_user_movie",
+                set_={"interaction_type": interaction_type},
             )
-            session.add(obj)
-
+        )
+        logger.debug("[БД] user_id=%s, movie_id=%s — interaction: %s", user_id, movie_id, interaction_type)
+        await session.execute(stmt)
         await session.commit()
 
     except Exception as e:
@@ -127,7 +132,15 @@ async def add_movies_by_interaction(
 async def get_movies_by_interaction(
     user_id: int, session: AsyncSession, interaction_types: list | None = None
 ) -> list[Movies]:
-    query = select(Movies).join(Users_interaction).where(Users_interaction.user_id == user_id)
+    # ORDER BY обязателен: без него Postgres не гарантирует одинаковый порядок между
+    # запросами, а пагинация избранного режет список в питоне — фильмы дублировались бы
+    # и пропадали при листании. desc() = свежие взаимодействия сверху.
+    query = (
+        select(Movies)
+        .join(Users_interaction)
+        .where(Users_interaction.user_id == user_id)
+        .order_by(Users_interaction.id.desc())
+    )
 
     if interaction_types:
         query = query.where(Users_interaction.interaction_type.in_(interaction_types))
@@ -141,12 +154,6 @@ async def get_movies_by_interaction(
         logger.error("[БД] Ошибка get_movies_by_interaction (user=%s, types=%s): %s", user_id, interaction_types, e)
         return []
 
-
-async def get_interacted_movie_ids(user_id: int, session: AsyncSession) -> set[int]:
-    """Возвращает set tmdb_id фильмов, с которыми пользователь уже взаимодействовал."""
-    query = select(Users_interaction.movie_id).where(Users_interaction.user_id == user_id)
-    result = await session.scalars(query)
-    return set(result.all())
 
 
 async def delete_movies_by_interaction(
@@ -446,6 +453,46 @@ async def invalidate_profile_cache(user_id: int):
         logger.warning("[Кэш] Ошибка инвалидации Redis для user_id=%s: %s", user_id, e)
 
 
+async def _search_by_vector(
+    session: AsyncSession,
+    user_id: int,
+    vec: list[float],
+    top_k: int,
+) -> list[Movies]:
+    """Ближайшие к вектору фильмы, за вычетом тех, что юзер уже видел.
+
+    Общее тело для подбора по анкете и по свободному запросу: обе задачи —
+    это поиск ближайших соседей, отличается только откуда взялся вектор.
+    """
+    # NOT EXISTS, а не NOT IN со списком id: тот вариант тянул все просмотренные
+    # фильмы в python и подставлял их в запрос по одному bind-параметру на штуку.
+    # У активного юзера это тысячи параметров (потолок Postgres — 65535) и запрос,
+    # который планировщик не может нормально оценить. Здесь же фильтрация целиком
+    # уходит в БД и опирается на индекс ix_user_interaction.
+    seen = (
+        select(Users_interaction.id)
+        .where(
+            Users_interaction.user_id == user_id,
+            Users_interaction.movie_id == Movies.tmdb_id,
+        )
+        .exists()
+    )
+
+    query = (
+        select(Movies)
+        .where(Movies.embedding.is_not(None), ~seen)
+        .order_by(Movies.embedding.cosine_distance(vec))
+        .limit(top_k)
+    )
+
+    # SET LOCAL действует до конца текущей транзакции, то есть настройка не течёт
+    # на соседние запросы и на другие соединения из пула.
+    await session.execute(text(f"SET LOCAL hnsw.ef_search = {int(EF_SEARCH)}"))
+
+    result = await session.scalars(query)
+    return list(result.all())
+
+
 async def get_movies_by_profile_embedding(
     session: AsyncSession,
     user_id: int,
@@ -458,19 +505,7 @@ async def get_movies_by_profile_embedding(
     if profile_vec is None:
         return []
 
-    interacted_ids = await get_interacted_movie_ids(user_id, session)
-    logger.debug("[Эмбеддинг] user_id=%s — уже взаимодействовал с %d фильмами", user_id, len(interacted_ids))
-
-    query = select(Movies).where(Movies.embedding.is_not(None))
-    if interacted_ids:
-        query = query.where(Movies.tmdb_id.not_in(interacted_ids))
-
-    query = query.order_by(
-        Movies.embedding.cosine_distance(profile_vec)
-    ).limit(top_k)
-
-    result = await session.scalars(query)
-    top_movies = list(result.all())
+    top_movies = await _search_by_vector(session, user_id, profile_vec, top_k)
 
     if top_movies:
         best = top_movies[0]
@@ -482,3 +517,39 @@ async def get_movies_by_profile_embedding(
         logger.warning("[Эмбеддинг] user_id=%s — не найдено подходящих фильмов", user_id)
 
     return top_movies
+
+
+async def get_movies_by_text_query(
+    session: AsyncSession,
+    user_id: int,
+    query_text: str,
+    top_k: int = 20,
+) -> list[Movies]:
+    """Подобрать фильмы по свободному запросу пользователя.
+
+    Модель кладёт произвольный текст в то же векторное пространство, что и описания
+    фильмов при наполнении базы, — поэтому запрос юзера ищется тем же способом,
+    что и профиль. Никакой внешний LLM для этого не нужен.
+    """
+    query_text = (query_text or "").strip()[:MAX_QUERY_LEN]
+    if not query_text:
+        return []
+
+    logger.info("[Поиск] user_id=%s — эмбеддинг запроса: '%s'", user_id, query_text)
+
+    model = get_model()
+    # encode() — синхронный CPU-bound вызов, в event loop его пускать нельзя:
+    # он заблокировал бы всех остальных пользователей бота на время расчёта.
+    vec = (await asyncio.to_thread(model.encode, query_text)).tolist()
+
+    movies = await _search_by_vector(session, user_id, vec, top_k)
+
+    if movies:
+        logger.info(
+            "[Поиск] user_id=%s — найдено %d, топ-1: '%s' (tmdb_id=%s)",
+            user_id, len(movies), movies[0].title, movies[0].tmdb_id,
+        )
+    else:
+        logger.warning("[Поиск] user_id=%s — по запросу ничего не найдено", user_id)
+
+    return movies

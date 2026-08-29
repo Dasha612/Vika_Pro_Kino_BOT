@@ -6,13 +6,16 @@ from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.types import ErrorEvent
 
 from config import cfg, setup_logging
 from middlewares.db import DataBaseSession, CheckUserSubscription
+from middlewares.throttling import ThrottlingMiddleware
 from handlers.anketa import anketa_router
 from handlers.recommendations import recommendations_router
 from handlers.favourites import favourites_router
-from database.engine import create_db, session_maker
+from database.engine import engine, session_maker, redis_client
+from database.migrate import run_migrations
 from database.embedding import get_model
 
 logger = logging.getLogger(__name__)
@@ -28,6 +31,21 @@ dp = Dispatcher(storage=storage)
 dp.include_router(anketa_router)
 dp.include_router(recommendations_router)
 dp.include_router(favourites_router)
+
+
+@dp.errors()
+async def on_error(event: ErrorEvent) -> bool:
+    """Последний рубеж: без него исключение уходит в лог, а пользователь видит тишину."""
+    logger.exception("Необработанная ошибка на апдейте: %s", event.update)
+
+    upd = event.update
+    target = upd.message or (upd.callback_query.message if upd.callback_query else None)
+    if target:
+        try:
+            await target.answer("Что-то пошло не так. Наберите /reset, чтобы продолжить.")
+        except Exception:
+            pass
+    return True
 
 
 async def health_handler(request: web.Request) -> web.Response:
@@ -46,7 +64,9 @@ async def start_health_server():
 
 async def on_startup(bot: Bot):
     logger.info("=== Запуск бота ===")
-    await create_db()
+    # Схема теперь приводится миграциями, а не create_all: только так изменения
+    # вроде uq_user_movie доезжают до уже существующей базы.
+    await run_migrations()
     logger.info("БД инициализирована, загружаю модель эмбеддингов...")
     await asyncio.to_thread(get_model)
     await start_health_server()
@@ -57,6 +77,11 @@ async def on_startup(bot: Bot):
 async def on_shutdown(bot: Bot):
     logger.info("=== Бот останавливается ===")
     await storage.close()
+    # Redis теперь держит ещё и ключи throttling, а engine — пул на 10 соединений:
+    # без явного закрытия Postgres увидит оборванные сессии, а asyncio на выходе
+    # напишет 'Unclosed connection'.
+    await redis_client.aclose()
+    await engine.dispose()
 
 
 async def main():
@@ -65,6 +90,9 @@ async def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
+    # Порядок = порядок выполнения. Throttling первым: отброшенный апдейт не должен
+    # успеть ни открыть сессию к БД, ни сходить в Telegram за проверкой подписки.
+    dp.update.middleware(ThrottlingMiddleware(redis=redis_client))
     dp.update.middleware(DataBaseSession(session_pool=session_maker))
     dp.update.middleware(CheckUserSubscription(bot=bot))
 

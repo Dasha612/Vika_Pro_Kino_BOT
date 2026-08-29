@@ -17,14 +17,12 @@ def _require_env(key: str) -> str:
 class Config:
     # Telegram
     bot_token: str = field(default_factory=lambda: _require_env("TOKEN"))
-    chat_id: str = field(default_factory=lambda: _require_env("CHAT_ID"))
+    # Пусто = проверка подписки на канал выключена (см. middlewares/db.py)
+    chat_id: str = field(default_factory=lambda: os.getenv("CHAT_ID", ""))
     channel_id: str = field(default_factory=lambda: os.getenv("CHANNEL_ID", ""))
 
     # Database
     db_url: str = field(default_factory=lambda: _require_env("DB_URL"))
-
-    # OpenAI
-    openai_api_key: str = field(default_factory=lambda: os.getenv("CHATGPT_API_KEY", ""))
 
     # TMDB
     tmdb_api_key: str = field(default_factory=lambda: os.getenv("TMDB_API_KEY", ""))
@@ -34,8 +32,10 @@ class Config:
 
     @property
     def full_chat_id(self) -> str:
-        """Chat ID в формате для Telegram API (-100...)."""
+        """Chat ID в формате для Telegram API (-100...). Пустая строка, если канал не задан."""
         cid = self.chat_id
+        if not cid:
+            return ""
         if not cid.startswith("-100"):
             cid = f"-100{cid}"
         return cid
