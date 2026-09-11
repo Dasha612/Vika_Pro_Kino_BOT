@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from chat_gpt.questions import FULL_WIDTH_OPTIONS, OPTION_ICONS, QUESTION_COLUMNS, QUESTION_KEYS
 from config import cfg
 
 
@@ -68,11 +69,31 @@ rate_buttons = InlineKeyboardMarkup(
 )
 
 
+SELECTED_MARK = "✅"
+
+
 def get_multi_select_keyboard(options_dict: dict, selected_options: set, question_key: str):
+    icons = OPTION_ICONS.get(question_key, {})
+    full_width = FULL_WIDTH_OPTIONS.get(question_key, set())
     keyboard = InlineKeyboardBuilder()
+    wide_buttons = []
     for option_key, option_text in options_dict.items():
-        prefix = ">> " if option_text in selected_options else ""
-        callback_data = f"select:{question_key}:{option_key}"
-        keyboard.add(InlineKeyboardButton(text=prefix + option_text, callback_data=callback_data))
-    keyboard.add(InlineKeyboardButton(text="Готово", callback_data=f"done:{question_key}"))
-    return keyboard.adjust(1).as_markup()
+        # Отметка выбора заменяет иконку, а не встаёт рядом: два эмодзи подряд — перебор.
+        if option_text in selected_options:
+            label = f"{SELECTED_MARK} {option_text}"
+        elif option_key in icons:
+            label = f"{icons[option_key]} {option_text}"
+        else:
+            label = option_text
+        button = InlineKeyboardButton(text=label, callback_data=f"select:{question_key}:{option_key}")
+        if option_key in full_width:
+            wide_buttons.append(button)
+        else:
+            keyboard.add(button)
+    keyboard.adjust(QUESTION_COLUMNS.get(question_key, 1))
+    for button in wide_buttons:
+        keyboard.row(button)
+
+    done_text = "Готово" if question_key == QUESTION_KEYS[-1] else "Далее →"
+    keyboard.row(InlineKeyboardButton(text=done_text, callback_data=f"done:{question_key}"))
+    return keyboard.as_markup()

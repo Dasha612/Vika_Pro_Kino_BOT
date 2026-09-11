@@ -16,7 +16,8 @@ from kbds.inline import (
     get_multi_select_keyboard,
     subscribe_button,
 )
-from chat_gpt.questions import questions, QUESTION_KEYS, CALLBACK_IDS
+from chat_gpt.questions import question_text, QUESTION_KEYS, CALLBACK_IDS
+from handlers.recommendations import SET_PROFILE_THEN_RECS, start_recommendations
 from config import cfg
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ class Anketa(StatesGroup):
     question_5 = State()
 
 
-@anketa_router.callback_query(F.data == "set_profile")
+@anketa_router.callback_query(F.data.in_({"set_profile", SET_PROFILE_THEN_RECS}))
 async def registration_start(callback: CallbackQuery, state: FSMContext):
     logger.info("[Анкета] user_id=%s нажал 'Заполнить анкету' — начинаем опрос", callback.from_user.id)
     # Раньше здесь стоял StateFilter(None): при любом активном состоянии хендлер
@@ -44,8 +45,12 @@ async def registration_start(callback: CallbackQuery, state: FSMContext):
     question_key = QUESTION_KEYS[0]
     await state.set_state(getattr(Anketa, question_key))
     markup = get_multi_select_keyboard(CALLBACK_IDS[question_key], set(), question_key)
-    await callback.message.edit_text(questions[0], reply_markup=markup)
-    await state.update_data(anketa_message_id=callback.message.message_id)
+    await callback.message.edit_text(question_text(0), reply_markup=markup)
+    await state.update_data(
+        anketa_message_id=callback.message.message_id,
+        # Юзер пришёл из «Запуска рекомендаций» — после анкеты продолжаем подбор, а не шлём в меню
+        then_recommendations=callback.data == SET_PROFILE_THEN_RECS,
+    )
     await callback.answer()
 
 
@@ -108,7 +113,9 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
         await callback.answer("Выберите хотя бы один вариант!", show_alert=True)
         return
 
-    message_id = data.get("anketa_message_id")
+    # Кнопка «Готово» висит на самом сообщении анкеты, так что оно же — запасной вариант,
+    # если id почему-то не сохранился: новых сообщений анкета не шлёт.
+    message_id = data.get("anketa_message_id") or callback.message.message_id
 
     if next_index >= len(QUESTION_KEYS):
         logger.info("[Анкета] user_id=%s — все вопросы заполнены, сохраняю анкету", callback.from_user.id)
@@ -118,25 +125,29 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
             logger.info("[Анкета] user_id=%s — анкета успешно сохранена в БД", callback.from_user.id)
         except Exception as e:
             logger.exception("Ошибка при сохранении анкеты: %s", e)
-            await callback.message.answer(f"Ошибка при сохранении анкеты: {e}")
+            await callback.message.edit_text(
+                f"Ошибка при сохранении анкеты: {e}",
+                reply_markup=get_callback_btns(btns={"В главное меню": "to_the_main_page"}),
+            )
             return
 
-        if message_id:
-            try:
-                await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
-                await asyncio.sleep(TYPING_PAUSE)
-                await callback.bot.edit_message_text(
-                    chat_id=callback.message.chat.id,
-                    message_id=message_id,
-                    text="Уфф... Все ответы записал",
-                )
-                await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
-                await asyncio.sleep(TYPING_PAUSE)
-                await callback.bot.edit_message_text(
-                    chat_id=callback.message.chat.id,
-                    message_id=message_id,
-                    text="Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить",
-                )
+        then_recommendations = data.get("then_recommendations", False)
+        try:
+            await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
+            await asyncio.sleep(TYPING_PAUSE)
+            await callback.bot.edit_message_text(
+                chat_id=callback.message.chat.id,
+                message_id=message_id,
+                text="Уфф... Все ответы записал",
+            )
+            await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
+            await asyncio.sleep(TYPING_PAUSE)
+            await callback.bot.edit_message_text(
+                chat_id=callback.message.chat.id,
+                message_id=message_id,
+                text="Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить",
+            )
+            if not then_recommendations:
                 await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
                 await asyncio.sleep(TYPING_PAUSE)
                 await callback.bot.edit_message_text(
@@ -146,24 +157,18 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
                     parse_mode="HTML",
                     reply_markup=get_callback_btns(btns=AFTER_ANKETA_BTNS),
                 )
-            except Exception as e:
-                logger.warning("Не удалось редактировать сообщение: %s", e)
+        except Exception as e:
+            logger.warning("Не удалось редактировать сообщение: %s", e)
+            if not then_recommendations:
                 await callback.message.answer(
                     "Выбери, что ты хочешь сделать",
                     reply_markup=get_callback_btns(btns=AFTER_ANKETA_BTNS),
                 )
-        else:
-            await callback.message.answer("Уфф... Все ответы записал")
-            await asyncio.sleep(TYPING_PAUSE)
-            await callback.message.answer("Я смотрю, что ты опытный киноман, но даже тебя я смогу удивить")
-            await asyncio.sleep(TYPING_PAUSE)
-            await callback.message.answer(
-                "<b>Выбери, что ты хочешь сделать</b>",
-                parse_mode="HTML",
-                reply_markup=get_callback_btns(btns=AFTER_ANKETA_BTNS),
-            )
 
         await callback.answer()
+        if then_recommendations:
+            logger.info("[Анкета] user_id=%s — анкета открыта из рекомендаций, сразу запускаю подбор", callback.from_user.id)
+            await start_recommendations(callback, session, state)
         return
 
     next_key = QUESTION_KEYS[next_index]
@@ -171,16 +176,13 @@ async def proceed_to_next_question(callback: CallbackQuery, state: FSMContext, s
     await state.set_state(getattr(Anketa, next_key))
     markup = get_multi_select_keyboard(CALLBACK_IDS[next_key], set(), next_key)
 
-    if message_id:
-        await callback.bot.edit_message_text(
-            chat_id=callback.message.chat.id,
-            message_id=message_id,
-            text=questions[next_index],
-            reply_markup=markup,
-        )
-    else:
-        sent = await callback.message.answer(questions[next_index], reply_markup=markup)
-        await state.update_data(anketa_message_id=sent.message_id)
+    await callback.bot.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=message_id,
+        text=question_text(next_index),
+        reply_markup=markup,
+    )
+    await state.update_data(anketa_message_id=message_id)
 
     await callback.answer()
 

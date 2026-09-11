@@ -20,7 +20,11 @@ config = context.config
 config.set_main_option("sqlalchemy.url", cfg.db_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: иначе fileConfig гасит все логгеры,
+    # созданные до этого момента (database.orm_query, database.tmdb_parser
+    # и т.д.), и любые предупреждения/ошибки после запуска миграций молча
+    # пропадают — например, сбои TMDB в update_movies_db были не видны в логах.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

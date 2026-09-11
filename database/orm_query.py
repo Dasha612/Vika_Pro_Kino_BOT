@@ -67,6 +67,16 @@ async def orm_add_user_rec_set(user_id: int, session: AsyncSession, data: dict):
             )
             session.add(new_obj)
 
+        # Отложенные по «Стоп» фильмы подбирались под прежнюю анкету: без этого после
+        # её смены подбор начинался бы с них. Удаляем в той же транзакции — заодно
+        # они снова могут попасть в выдачу, если подходят и под новый профиль.
+        await session.execute(
+            delete(Users_interaction).where(
+                Users_interaction.user_id == user_id,
+                Users_interaction.interaction_type == "unwatched",
+            )
+        )
+
         await session.commit()
         await invalidate_profile_cache(user_id)
         logger.info("[БД] Анкета user_id=%s сохранена успешно", user_id)
@@ -321,8 +331,14 @@ async def update_movies_db(
         logger.info("[1/4] Получено %d ID за %.1f сек", len(all_ids), time.monotonic() - t0)
 
     # 2) Фильтруем уже существующие
+    # dict.fromkeys вместо чистого списка: popular-страницы опрашиваются параллельно,
+    # и один и тот же фильм может попасть на две соседние страницы (рейтинг сдвигается
+    # прямо во время обхода) — без дедупликации один tmdb_id дважды попадает в один
+    # батч, а INSERT ... ON CONFLICT DO UPDATE не может обновить одну строку дважды
+    # за раз (asyncpg.CardinalityViolationError). fromkeys, а не set() — чтобы
+    # сохранить исходный порядок ID.
     existing_ids = await load_existing_tmdb_ids(session)
-    new_ids = [mid for mid in all_ids if mid not in existing_ids]
+    new_ids = [mid for mid in dict.fromkeys(all_ids) if mid not in existing_ids]
 
     if limit:
         new_ids = new_ids[:limit]

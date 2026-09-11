@@ -6,7 +6,6 @@ from aiogram import Router, Bot, F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kbds.inline import get_callback_btns
 from handlers.movie_utils import truncate
 from database.orm_query import get_movies_by_interaction
 
@@ -21,23 +20,34 @@ TITLE_LIMIT = 80
 MAX_MESSAGE_LEN = 4096
 
 
+HOME_BTN = InlineKeyboardButton(text="🏠 В главное меню", callback_data="to_the_main_page")
+
+
+def _films_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "фильм"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return "фильма"
+    return "фильмов"
+
+
 def _format_movie(index: int, movie) -> str:
-    """Одна строка списка. Всё, что пришло из TMDB, экранируется:
-    название вида 'Fast & Furious' иначе ломает разбор HTML целиком —
-    вместе с ним падает весь список, а не одна строка."""
+    """Один пункт списка: название-ссылка, под ним год и рейтинг.
+
+    Всё, что пришло из TMDB, экранируется: название вида 'Fast & Furious'
+    иначе ломает разбор HTML целиком — вместе с ним падает весь список."""
     title = truncate(movie.title or "Без названия", TITLE_LIMIT)
-    year = movie.release_date.year if movie.release_date else "Неизвестно"
+    year = str(movie.release_date.year) if movie.release_date else "год неизвестен"
     # Именно `is not None`: рейтинг 0.0 — это «ноль», а не «нет данных»
-    rating = round(movie.vote_average, 1) if movie.vote_average is not None else "Нет данных"
+    rating = f"{movie.vote_average:.1f}" if movie.vote_average is not None else "—"
 
     # quote_plus заодно убирает из адреса кавычки и амперсанды, так что
     # href остаётся корректным при любом названии
     google_url = "https://www.google.com/search?q=" + quote_plus(f"смотреть фильм {title}")
 
     return (
-        f'<b>{index}. <a href="{google_url}">{html.escape(title)}</a></b>,'
-        f" <i>{year} год</i>,"
-        f" <i>Рейтинг: {rating}</i>"
+        f'<b>{index}.</b> <a href="{google_url}"><b>{html.escape(title)}</b></a>\n'
+        f"<i>{year} · ⭐ {rating}</i>"
     )
 
 
@@ -55,21 +65,22 @@ async def send_favourites(callback: CallbackQuery, session: AsyncSession, bot: B
         logger.info("[Избранное] user_id=%s — список пуст", user_id)
         await callback.answer()
         await callback.message.edit_text(
-            "У вас пока нет избранных фильмов.",
-            reply_markup=get_callback_btns(btns={"На главную": "to_the_main_page"}),
+            "<b>❤️ Избранное</b>\n\n"
+            "Здесь пока пусто. Жми ❤️ на карточке фильма в рекомендациях — он появится в этом списке.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[HOME_BTN]]),
         )
         return
 
     total_pages = -(-len(movies) // MOVIES_PER_PAGE)
     # Список мог сократиться с момента отрисовки кнопок — тогда старая кнопка
-    # ">>" уводила бы на пустую страницу с одним заголовком.
+    # «▶️» уводила бы на пустую страницу с одним заголовком.
     page = max(1, min(page, total_pages))
     logger.info("[Избранное] user_id=%s — всего избранных: %d, страница %d из %d", user_id, len(movies), page, total_pages)
 
     start = (page - 1) * MOVIES_PER_PAGE
     movies_for_page = movies[start : start + MOVIES_PER_PAGE]
 
-    header = "<b>Ваши избранные фильмы:</b>\n\n"
+    header = f"<b>❤️ Избранное</b> · {len(movies)} {_films_word(len(movies))}\n\n"
     lines = [_format_movie(i, m) for i, m in enumerate(movies_for_page, start=start + 1)]
 
     # Пять строк с длинными названиями теоретически перебирают лимит сообщения.
@@ -81,17 +92,18 @@ async def send_favourites(callback: CallbackQuery, session: AsyncSession, bot: B
             break
         text += line + "\n\n"
 
-    pagination_buttons = []
-    if page > 1:
-        pagination_buttons.append(InlineKeyboardButton(text="<<", callback_data="page_1"))
-        pagination_buttons.append(InlineKeyboardButton(text="<", callback_data=f"page_{page - 1}"))
-    if page < total_pages:
-        pagination_buttons.append(InlineKeyboardButton(text=">", callback_data=f"page_{page + 1}"))
-        pagination_buttons.append(InlineKeyboardButton(text=">>", callback_data=f"page_{total_pages}"))
-
-    # На единственной странице ряд пустой — такую клавиатуру Telegram не примет
-    rows = [pagination_buttons] if pagination_buttons else []
-    rows.append([InlineKeyboardButton(text="На главную", callback_data="to_the_main_page")])
+    # Ряд навигации: ◀️  2 / 5  ▶️. Счётчик — кнопка-заглушка (noop), стрелки
+    # на краях списка просто не показываем. На единственной странице ряда нет вовсе.
+    rows = []
+    if total_pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"page_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"page_{page + 1}"))
+        rows.append(nav)
+    rows.append([HOME_BTN])
 
     await callback.answer()
     await callback.message.edit_text(
@@ -100,6 +112,12 @@ async def send_favourites(callback: CallbackQuery, session: AsyncSession, bot: B
         disable_web_page_preview=True,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
+
+
+@favourites_router.callback_query(F.data == "noop")
+async def noop(callback: CallbackQuery):
+    """Счётчик страниц — не кнопка по смыслу, но без ответа у юзера крутился бы спиннер."""
+    await callback.answer()
 
 
 @favourites_router.callback_query(F.data.startswith("page_"))

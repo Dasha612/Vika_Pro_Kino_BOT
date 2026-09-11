@@ -1,13 +1,15 @@
+import html
 import logging
 
 from aiogram import Router, Bot, types, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from handlers.callback_data import Menu_Callback
-from handlers.movie_utils import send_movie_card
+from handlers.movie_utils import send_movie_card, truncate
 from database.orm_query import (
     add_movies_by_interaction,
     get_movie_from_db,
@@ -28,6 +30,21 @@ from kbds.pagination import create_movie_carousel_keyboard
 logger = logging.getLogger(__name__)
 
 recommendations_router = Router()
+
+PROFILE_HEADER = "<b>Подборка по твоему профилю</b>"
+SEARCH_EXAMPLES = "Например: <i>мрачный детектив про маньяка</i> или <i>лёгкое кино про дружбу</i>."
+# Запрос юзера целиком в заголовке не нужен — он только растягивает сообщение
+HEADER_QUERY_LIMIT = 100
+ERROR_TEXT = "Возникла ошибка с выбором фильма. Попробуйте снова."
+ERROR_BTNS = {"Запуск рекомендаций": "recommendations", "В меню": "to_the_main_page"}
+# Анкета, открытая из «Запуска рекомендаций»: после неё сразу идёт подбор
+SET_PROFILE_THEN_RECS = "set_profile_recs"
+
+
+def _cancel_search_kb():
+    # Без кнопки состояние waiting_for_query — тупик: меню заблокировано,
+    # и выйти можно было бы только командой /reset.
+    return get_callback_btns(btns={"Отмена": "cancel_search"}, sizes=(1,))
 
 
 class Recomendations(StatesGroup):
@@ -58,13 +75,67 @@ async def _current_movie(state: FSMContext, session: AsyncSession, data: dict | 
     return await get_movie_from_db(ids[idx], session), ids, idx
 
 
-async def _show_movie(callback: CallbackQuery, state: FSMContext, movies: list, edit: bool = False):
-    """Показывает первый фильм списка и кладёт в FSM только их id."""
+async def _delete_quietly(message: types.Message):
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.debug("Не удалось удалить сообщение %s: %s", message.message_id, e)
+
+
+async def _edit_or_answer(message: types.Message, message_id: int | None, text: str, reply_markup=None):
+    """Пишет текст в уже существующее сообщение бота вместо того, чтобы слать новое.
+
+    message — любое сообщение из этого чата (даже уже удалённое): через него берём
+    chat_id и шлём новое, если отредактировать не вышло — сообщения нет, оно
+    слишком старое и т.п. Без кнопок юзер оставаться не должен.
+    """
+    if message_id:
+        try:
+            await message.bot.edit_message_text(
+                text, chat_id=message.chat.id, message_id=message_id, reply_markup=reply_markup
+            )
+            return
+        except TelegramBadRequest as e:
+            # Тот же текст повторно (например, второй стикер подряд) — не ошибка.
+            if "message is not modified" in str(e):
+                return
+            logger.warning("Не удалось отредактировать сообщение %s: %s", message_id, e)
+    await message.answer(text, reply_markup=reply_markup)
+
+
+async def _set_header(message: types.Message, origin_message_id: int | None, text: str):
+    """Превращает исходное сообщение (меню или приглашение) в заголовок над карточкой.
+
+    Кнопки над карточкой, пока идёт подбор, всё равно заблокированы, а «Отмена»
+    из поиска в этом состоянии вообще ни на что не отвечает — поэтому снимаем их
+    (edit без reply_markup убирает клавиатуру).
+    """
+    if not origin_message_id:
+        return
+    try:
+        await message.bot.edit_message_text(text, chat_id=message.chat.id, message_id=origin_message_id)
+    except TelegramBadRequest as e:
+        logger.debug("Не удалось поставить заголовок в сообщение %s: %s", origin_message_id, e)
+
+
+async def _show_movie(
+    callback: CallbackQuery,
+    state: FSMContext,
+    movies: list,
+    edit: bool = False,
+    origin_message_id: int | None = None,
+):
+    """Показывает первый фильм списка и кладёт в FSM только их id.
+
+    origin_message_id — меню, с которого начался подбор. Передаётся только на
+    старте: оно становится заголовком над карточкой, а при подгрузке новой порции
+    в FSM остаётся прежнее значение.
+    """
     message = await send_movie_card(
         callback.message, movies[0], 0, edit=edit, custom_keyboard=create_movie_carousel_keyboard
     )
     await state.set_state(Recomendations.waiting_for_action)
-    await state.update_data(
+    data = dict(
         movie_ids=[m.tmdb_id for m in movies],
         current_index=0,
         last_action="",
@@ -74,7 +145,22 @@ async def _show_movie(callback: CallbackQuery, state: FSMContext, movies: list, 
         message_id=message.message_id,
         chat_id=message.chat.id,
     )
+    if origin_message_id is not None:
+        data["origin_message_id"] = origin_message_id
+        await _set_header(message, origin_message_id, PROFILE_HEADER)
+    await state.update_data(**data)
     return message
+
+
+async def _replace_card_with_text(callback: CallbackQuery, origin_message_id: int | None, text: str, reply_markup):
+    """Убирает карточку и пишет итоговый текст в сообщение, с которого начался подбор.
+
+    Карточка — фото, а Telegram не даёт отредактировать фото-сообщение в текстовое.
+    Поэтому карточку удаляем, а текст кладём в исходное сообщение (заголовок прямо
+    над карточкой) — новых сообщений в чате не появляется.
+    """
+    await _delete_quietly(callback.message)
+    await _edit_or_answer(callback.message, origin_message_id, text, reply_markup)
 
 
 @recommendations_router.callback_query(F.data == "choose_option")
@@ -98,12 +184,9 @@ async def prompt_search_query(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(Recomendations.waiting_for_query)
     msg = await callback.message.edit_text(
-        "Опиши, что хочешь посмотреть — своими словами.\n"
-        "Например: <i>мрачный детектив про маньяка</i> или <i>лёгкое кино про дружбу</i>.",
+        f"Опиши, что хочешь посмотреть — своими словами.\n{SEARCH_EXAMPLES}",
         parse_mode="HTML",
-        # Без кнопки состояние waiting_for_query — тупик: меню заблокировано,
-        # и выйти можно было бы только командой /reset.
-        reply_markup=get_callback_btns(btns={"Отмена": "cancel_search"}, sizes=(1,)),
+        reply_markup=_cancel_search_kb(),
     )
     await state.update_data(prompt_message_id=msg.message_id)
     await callback.answer()
@@ -123,6 +206,8 @@ async def cancel_search(callback: CallbackQuery, state: FSMContext):
 @recommendations_router.message(Recomendations.waiting_for_query, F.text)
 async def process_search_query(message: types.Message, state: FSMContext, session: AsyncSession, bot: Bot):
     user_text = (message.text or "").strip()
+    # Ответ юзера в чате не оставляем: запрос будет виден в заголовке над карточкой.
+    await _delete_quietly(message)
     if not user_text:
         return
     logger.info("[Поиск] user_id=%s ввёл запрос: '%s'", message.from_user.id, user_text)
@@ -141,19 +226,29 @@ async def process_search_query(message: types.Message, state: FSMContext, sessio
 
 
 async def _run_search(message: types.Message, state: FSMContext, session: AsyncSession, user_text: str):
+    prompt_message_id = (await state.get_data()).get("prompt_message_id")
     movies = await get_movies_by_text_query(session, message.from_user.id, user_text)
 
     if not movies:
         logger.info("[Поиск] user_id=%s — пустая выдача по запросу", message.from_user.id)
         await state.clear()
-        await message.answer(
+        await _edit_or_answer(
+            message,
+            prompt_message_id,
             "Ничего не нашёл по этому запросу. Попробуй переформулировать — "
             "чем подробнее опишешь настроение и сюжет, тем лучше я попадаю.",
-            reply_markup=get_callback_btns(btns=RECOMMENDATIONS_MENU_BTNS),
+            get_callback_btns(btns=RECOMMENDATIONS_MENU_BTNS),
         )
         return
 
+    # Приглашение — текстовое сообщение, в карточку-фото его не превратить,
+    # поэтому карточка идёт отдельным сообщением, а приглашение становится заголовком.
     msg = await send_movie_card(message, movies[0], 0, custom_keyboard=create_movie_carousel_keyboard)
+    await _set_header(
+        message,
+        prompt_message_id,
+        f"<b>Фильмы по запросу:</b> «{html.escape(truncate(user_text, HEADER_QUERY_LIMIT))}»",
+    )
     await state.set_state(Recomendations.waiting_for_action)
     await state.update_data(
         movie_ids=[m.tmdb_id for m in movies],
@@ -163,18 +258,25 @@ async def _run_search(message: types.Message, state: FSMContext, session: AsyncS
         custom_query=True,
         message_id=msg.message_id,
         chat_id=msg.chat.id,
+        origin_message_id=prompt_message_id,
     )
 
 
 @recommendations_router.message(Recomendations.waiting_for_query)
-async def reject_non_text_query(message: types.Message):
+async def reject_non_text_query(message: types.Message, state: FSMContext):
     """Стикер/фото/голосовое в режиме ввода запроса: без этого хендлера
     апдейт молча проваливался бы мимо, и бот выглядел бы зависшим."""
-    await message.answer("Мне нужен текст — опиши словами, что хочешь посмотреть.")
+    await _delete_quietly(message)
+    await _edit_or_answer(
+        message,
+        (await state.get_data()).get("prompt_message_id"),
+        f"Мне нужен текст — опиши словами, что хочешь посмотреть.\n{SEARCH_EXAMPLES}",
+        _cancel_search_kb(),
+    )
 
 
 @recommendations_router.callback_query(F.data == "recommendations")
-async def send_recommendations(callback: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext):
+async def send_recommendations(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
     user_id = callback.from_user.id
     logger.info("[Рекомендации] user_id=%s нажал 'Запуск рекомендаций'", user_id)
     await safe_callback_answer(callback)
@@ -191,14 +293,25 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
         await safe_callback_answer(callback, "Подождите, пока завершится текущий процесс.")
         return
 
-    await bot.send_chat_action(callback.message.chat.id, action="typing")
+    await start_recommendations(callback, session, state)
+
+
+async def start_recommendations(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+    """Показывает первую карточку подборки в сообщении, где нажали кнопку.
+
+    Вынесено из хендлера, чтобы анкета, открытая из «Запуска рекомендаций»,
+    могла сразу продолжить подбор, а не возвращать юзера в меню.
+    """
+    user_id = callback.from_user.id
+    await callback.bot.send_chat_action(callback.message.chat.id, action="typing")
 
     recommendations_status = await check_recommendations_status(user_id, session)
     if not recommendations_status:
         logger.info("[Рекомендации] user_id=%s — анкета не заполнена, предлагаю заполнить", user_id)
         await callback.message.edit_text(
             "Прежде чем порекомендовать тебе фильм, мне нужно узнать о тебе больше информации. Давай заполним анкету?",
-            reply_markup=get_callback_btns(btns={"Давай": "set_profile"}),
+            # Отдельный callback: по нему анкета после сохранения сразу запустит подбор
+            reply_markup=get_callback_btns(btns={"Давай": SET_PROFILE_THEN_RECS}),
         )
         return
 
@@ -207,7 +320,7 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
 
     if unwatched_movies:
         logger.info("[Рекомендации] user_id=%s — показываю непросмотренный: '%s'", user_id, unwatched_movies[0].title)
-        await _show_movie(callback, state, unwatched_movies)
+        await _show_movie(callback, state, unwatched_movies, origin_message_id=callback.message.message_id)
         await delete_movies_by_interaction(user_id, session, ["unwatched"], unwatched_movies[0].tmdb_id)
         return
 
@@ -225,7 +338,7 @@ async def send_recommendations(callback: CallbackQuery, session: AsyncSession, b
         return
 
     logger.info("[Рекомендации] user_id=%s — подобрано %d фильмов, первый: '%s'", user_id, len(movies), movies[0].title)
-    await _show_movie(callback, state, movies)
+    await _show_movie(callback, state, movies, origin_message_id=callback.message.message_id)
 
 
 async def _load_next_batch(callback: CallbackQuery, state: FSMContext, session: AsyncSession, user_id: int):
@@ -235,17 +348,19 @@ async def _load_next_batch(callback: CallbackQuery, state: FSMContext, session: 
 
     if not movies:
         logger.warning("[Рекомендации] user_id=%s — новая порция пуста, фильмы закончились", user_id)
-        await callback.message.answer(
-            "Пока не смог подобрать новые фильмы. Попробуй обновить анкету.",
-            reply_markup=get_callback_btns(
-                btns={"Обновить анкету": "reset_anketa", "В меню": "to_the_main_page"}
-            ),
-        )
+        origin_message_id = (await state.get_data()).get("origin_message_id")
         await state.clear()
+        await _replace_card_with_text(
+            callback,
+            origin_message_id,
+            "Пока не смог подобрать новые фильмы. Попробуй обновить анкету.",
+            get_callback_btns(btns={"Обновить анкету": "reset_anketa", "В меню": "to_the_main_page"}),
+        )
         return
 
     logger.info("[Рекомендации] user_id=%s — новая порция: %d фильмов, первый: '%s'", user_id, len(movies), movies[0].title)
-    await _show_movie(callback, state, movies)
+    # edit=True: новая порция встаёт на место текущей карточки, а не шлётся под ней.
+    await _show_movie(callback, state, movies, edit=True)
 
 
 @recommendations_router.callback_query(Menu_Callback.filter())
@@ -303,27 +418,22 @@ async def _handle_movie_action(
         for mid in remaining_ids:
             await add_movies_by_interaction(user_id, mid, "unwatched", session)
 
-        try:
-            await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
-        except Exception:
-            pass
         await state.clear()
-        # Раньше здесь всё заканчивалось удалением карточки: пустой чат без кнопок,
-        # и юзеру оставалось догадаться набрать /start.
-        await callback.message.answer(
+        await _replace_card_with_text(
+            callback,
+            data.get("origin_message_id"),
             "Остановил подбор. Отложенные фильмы сохранил — вернёмся к ним в следующий раз.",
-            reply_markup=get_callback_btns(btns=MAIN_MENU_BTNS),
+            get_callback_btns(btns=MAIN_MENU_BTNS),
         )
         await safe_callback_answer(callback)
         return
 
     if movie is None:
         logger.error("[Действие] user_id=%s — фильм не найден (индекс %d из %d)", user_id, current_index, len(movie_ids))
-        await callback.message.answer(
-            "Возникла ошибка с выбором фильма. Попробуйте снова.",
-            reply_markup=get_callback_btns(btns={"Запуск рекомендаций": "recommendations", "В меню": "to_the_main_page"}),
-        )
         await state.clear()
+        await _replace_card_with_text(
+            callback, data.get("origin_message_id"), ERROR_TEXT, get_callback_btns(btns=ERROR_BTNS)
+        )
         await safe_callback_answer(callback)
         return
 
@@ -373,11 +483,13 @@ async def _advance(
 
     if data.get("custom_query", False):
         logger.info("[Действие] user_id=%s — пользовательский запрос исчерпан, завершаю", user_id)
-        await callback.message.answer(
-            "Это были все фильмы по твоему запросу.",
-            reply_markup=get_callback_btns(btns={"Запуск рекомендаций": "recommendations", "В меню": "to_the_main_page"}),
-        )
         await state.clear()
+        await _replace_card_with_text(
+            callback,
+            data.get("origin_message_id"),
+            "Это были все фильмы по твоему запросу.",
+            get_callback_btns(btns={"Запуск рекомендаций": "recommendations", "В меню": "to_the_main_page"}),
+        )
         await safe_callback_answer(callback)
         return
 
@@ -398,6 +510,10 @@ async def handle_rating(callback: types.CallbackQuery, state: FSMContext, sessio
         logger.error("[Оценка] user_id=%s — фильм не найден (индекс %d из %d)", user_id, current_index, len(movie_ids))
         await safe_callback_answer(callback, "Ошибка: фильм не найден")
         await state.clear()
+        # Иначе карточка так и висела бы с кнопками оценки, которые больше ничего не делают.
+        await _replace_card_with_text(
+            callback, data.get("origin_message_id"), ERROR_TEXT, get_callback_btns(btns=ERROR_BTNS)
+        )
         return
 
     interaction = "watched" if user_rating >= 4 else "disliked"

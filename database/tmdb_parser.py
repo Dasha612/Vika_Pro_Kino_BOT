@@ -152,7 +152,10 @@ class TMDBFetcher:
         if self._session is None or self._session.closed:
             connector = aiohttp.TCPConnector(limit=self._max_concurrent, limit_per_host=self._max_concurrent)
             timeout = aiohttp.ClientTimeout(total=20, connect=5)
-            self._session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+            # trust_env: подхватить HTTP_PROXY/HTTPS_PROXY из окружения, если заданы
+            # (нужно локально, когда TMDB доступен только через прокси/VPN). На проде,
+            # где эти переменные не выставлены, ничего не меняет.
+            self._session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True)
 
     async def close(self):
         if self._session and not self._session.closed:
@@ -227,7 +230,7 @@ async def get_popular_ids_async(pages: int = 50) -> list[int]:
                 logger.warning("popular page=%d ошибка: %s", page, e)
                 return []
 
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True) as session:
         tasks = [_fetch_page(session, p) for p in range(1, pages + 1)]
         results = await asyncio.gather(*tasks)
 
